@@ -22,8 +22,14 @@
  *
  */
 
-#define HFP_CODEC_CVSD 0x00
-#define HFP_CODEC_MSBC 0x02
+#define HFP_AUDIO_CODEC_CVSD    0x01
+#define HFP_AUDIO_CODEC_MSBC    0x02
+
+#define OFONO_SERVICE "org.ofono"
+#define HF_AUDIO_AGENT_INTERFACE OFONO_SERVICE ".HandsfreeAudioAgent"
+#define HF_AUDIO_MANAGER_INTERFACE OFONO_SERVICE ".HandsfreeAudioManager"
+
+#define HF_AUDIO_AGENT_PATH "/HandsfreeAudioAgent"
 
 #define A2DP_CODEC_SBC			0x00
 #define A2DP_CODEC_MPEG12		0x01
