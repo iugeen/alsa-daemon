@@ -39,7 +39,7 @@ int main (int argc, char *argv[]) {
 				write (1, buf, total_read);
 		}
 		
-		close (fd);
+    close(fd);
 	}
 }
 

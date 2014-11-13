@@ -20,7 +20,7 @@ sbc/libsbc.a: sbc/sbc.o sbc/sbc_primitives_armv6.o sbc/sbc_primitives.o \
 	$(CC) $(CFLAGS) $(LDFLAGS) -c -o $@ $<
 
 a2dp-alsa: a2dp-alsa.c sbc/libsbc.a
-	$(CC) $(shell pkg-config --cflags dbus-1) $(CFLAGS) $(shell pkg-config --libs dbus-1) $(LDFLAGS) -o $@ $< sbc/libsbc.a
+	$(CC) $(shell pkg-config --cflags dbus-1) $(CFLAGS) $(shell pkg-config --libs dbus-1) $(LDFLAGS) -o $@ $< sbc/libsbc.a -w
 
 a2dp-buffer: a2dp-buffer.c
 	$(CC) -o $@ $<
