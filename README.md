@@ -11,10 +11,12 @@ Run steps:
 - stop pulseaudio daemon
 
 SINK :
-- ./a2dp-alsa --sink : for a2dp streaming 
+- ./a2dp-alsa --sink
 
 SOURCE :
 
   connect source 1 with sink 8 : connect 1 8 
+
 - ./a2dp-alsa --source
-aplay -D MEDIA_playback_0 onclassical_demo_roccato_anonymous-roccato_riflessi_small-version.wav
+
+- aplay -D MEDIA_playback_0 onclassical_demo_roccato_anonymous-roccato_riflessi_small-version.wav
