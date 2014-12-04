@@ -24,7 +24,9 @@
 #include <getopt.h>
 #include <poll.h>
 #include <alsa/asoundlib.h>
+#include <sbc/sbc.h>
 #include "uthash.h"
+#include "time-smoother.h"
 
 // our own defines
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
@@ -36,6 +38,8 @@
 #else
 #define debug_print(...)
 #endif
+
+#define HISTORY_MAX 64
 
 // bluez specific defines & includes
 #define GET_MANAGED_OBJECTS "GetManagedObjects"
@@ -78,13 +82,45 @@
 
 // structs and prototypes
 
+struct pa_smoother {
+    uint64_t adjust_time, history_time;
+
+    uint64_t time_offset;
+
+    uint64_t px, py;     /* Point p, where we want to reach stability */
+    double dp;            /* Gradient we want at point p */
+
+    uint64_t ex, ey;     /* Point e, which we estimated before and need to smooth to */
+    double de;            /* Gradient we estimated for point e */
+    uint64_t ry;         /* The original y value for ex */
+
+                          /* History of last measurements */
+    uint64_t history_x[HISTORY_MAX], history_y[HISTORY_MAX];
+    unsigned history_idx, n_history;
+
+    /* To even out for monotonicity */
+    uint64_t last_y, last_x;
+
+    /* Cached parameters for our interpolation polynomial y=ax^3+b^2+cx */
+    double a, b, c;
+    bool abc_valid:1;
+
+    bool monotonic:1;
+    bool paused:1;
+    bool smoothing:1; /* If false we skip the polynomial interpolation step */
+
+    uint64_t pause_time;
+
+    unsigned min_history;
+};
+
 typedef struct
 {
   // sync and command management
   pthread_cond_t cond;
   pthread_mutex_t mutex;
   pthread_t t_handle;       // thread handle
-  pthread_t t_audio_handle; // audio thread handle
+  pthread_t t_audio_handle; // audio stream thread handle
   volatile enum
   {
     IO_CMD_IDLE = 0,
@@ -108,6 +144,10 @@ typedef struct
   int write; //false = read, true - write
 
   int devId;
+  int streamStatus;
+  snd_pcm_t *pcm;
+
+  char *devType;
 
   // codec stuff
   a2dp_sbc_t cap;
@@ -123,11 +163,14 @@ typedef struct
 
 void *io_thread_run(void *ptr);
 void *stream_bt_input(void *ptr);
+void *pa_push(void *ptr);
+void *a2dp_push(void *ptr);
+void *stream_bt_output(void *ptr);
 void io_thread_set_command (io_thread_tcb_s *data, int command);
 io_thread_tcb_s *create_io_thread();
 void destroy_io_thread(io_thread_tcb_s *p);
 int transport_acquire (DBusConnection *conn, char *transport_path, int *fd, int *read_mtu, int *write_mtu);
-int transport_release (DBusConnection *conn, char *transport_path);
+int transport_release (DBusConnection *conn, char *transport_path, void *ptr);
 
 // globals
 int quit=0;        // when set to 1, program terminates
@@ -517,13 +560,14 @@ int ofono_transport_acquire (DBusConnection *conn, char *transport_path, int *fd
      * @param [in] system bus connection
      * @param [in] transport object path (must come from MediaEndpoint1.SetConfiguration)
      ********************/
-int transport_release(DBusConnection *conn, char *transport_path)
+int transport_release(DBusConnection *conn, char *transport_path, void *ptr)
 {
+
   DBusMessage *msg, *reply;
   DBusMessageIter iter;
   DBusError err;
 
-  debug_print ("release %s\n", transport_path);
+  debug_print ("\nRRelease %s\n", transport_path);
   dbus_error_init(&err);
   msg = dbus_message_new_method_call("org.bluez",
                                      transport_path,                // object to call on
@@ -850,14 +894,9 @@ DBusMessage* endpoint_set_configuration (DBusMessage *msg, io_thread_tcb_s **io_
     dbus_message_iter_next(&iterprop);
   }
 
-
   char test[100];
-
   strcpy(test,dev_path);
   strcat(test,"/player0");
-
-
-  debug_print ("Set configuration (%s) - dev_path (%s)\n", transport_path, test);
 
   //capture the transport_path and allocate the transport later, when the audiosource is "connected".
   HASH_FIND_STR (head, transport_path, io_data);
@@ -871,15 +910,24 @@ DBusMessage* endpoint_set_configuration (DBusMessage *msg, io_thread_tcb_s **io_
     //read or write
     cmd_path = (char *)dbus_message_get_path (msg);
     if ( strcasecmp (cmd_path, A2DP_SINK_ENDPOINT) == 0)
+    {
       io_data->write = 0;
+    }
     else if ( strcasecmp (cmd_path, A2DP_SINK_ENDPOINT_SECOND) == 0)
+    {
       io_data->write = 0;
+    }
     else if ( strcasecmp (cmd_path, A2DP_SOURCE_ENDPOINT) == 0)
+    {
+      io_data->dev_path = strdup (dev_path);
       io_data->write = 1;
+    }
 
     HASH_ADD_KEYPTR (hh, head, io_data->transport_path, strlen(io_data->transport_path), io_data);
     *io_threads_table = head;
   }
+
+  debug_print ("Set configuration (%s) - dev_path (%s) : write (%d)\n", transport_path, io_data->dev_path, io_data->write);
 
   return dbus_message_new_method_return(msg);
 
@@ -1072,7 +1120,7 @@ void callRemoved_property_changed (DBusConnection *conn, DBusMessage *msg, int w
   } while (io_data && io_data != head);
 
   debug_print ("[DEBUG] - Audio streaming STOP\n");
-  transport_release (conn, io_data->transport_path);
+  transport_release (conn, io_data->transport_path, io_data);
   io_thread_set_command (io_data, IO_CMD_IDLE);
   return;
 
@@ -1122,6 +1170,9 @@ void audiosource_property_changed (DBusConnection *conn, DBusMessage *msg, int w
   dbus_message_iter_init(msg, &iter);
   dbus_message_iter_get_basic(&iter, &key);
 
+  char *devType = "noType";
+  statusString="noStatus";
+
   if (strcasecmp(key, "org.bluez.MediaControl1") == 0)
   {
     while (dbus_message_iter_get_arg_type (&iter) != DBUS_TYPE_INVALID)
@@ -1152,12 +1203,13 @@ void audiosource_property_changed (DBusConnection *conn, DBusMessage *msg, int w
                   dbus_message_iter_get_basic (&subiter, &valBool);
                   if(valBool)
                   {
+                    devType = "headset";
                     statusString="playing";
                   }
                   else
                   {
+                    devType = "headset";
                     statusString="paused";
-                    goto fail;
                   }
                 }
                 dbus_message_iter_next (&subiter);
@@ -1198,11 +1250,13 @@ void audiosource_property_changed (DBusConnection *conn, DBusMessage *msg, int w
                 {
                   if (strcasecmp(keyStatus, "Status") != 0)
                   {
+                    devType = "a2dp";
                     devNumber++;
                     goto fail;
                   }
                   else
                   {
+                    devType = "a2dp";
                     devNumber++;
                     dbus_message_iter_get_basic(&subiter, &statusString);
                   }
@@ -1226,15 +1280,15 @@ void audiosource_property_changed (DBusConnection *conn, DBusMessage *msg, int w
   }
 
   dev_path = (char *)dbus_message_get_path (msg);
-  debug_print ("state for %s: %s\n", dev_path, statusString);
+  debug_print ("state for %s: %s (type : (%s))\n", dev_path, statusString, devType);
 
   if (!head) return;
   io_data = head;
   do
   {
+    debug_print ("TEST dev_path(%s) io_data->dev_path (%s)\n", dev_path, io_data->dev_path);
     if (strcasecmp (dev_path, io_data->dev_path) == 0)
     {
-      debug_print ("IF dev(%s) - io_data(%s)###\n", dev_path, io_data->dev_path);
       break;
     }
     else
@@ -1245,35 +1299,33 @@ void audiosource_property_changed (DBusConnection *conn, DBusMessage *msg, int w
 
   if (!io_data) return;
 
-//  //decode state & transition
-//  new_state = transition = -1;
-//  if ( strcasecmp (statusString,      "paused")  == 0 ) new_state = STATE_CONNECTED;
-//  else if ( strcasecmp (statusString, "playing") == 0 ) new_state = STATE_PLAYING;
-//  else if ( strcasecmp (statusString, "stopped") == 0 ) new_state = STATE_DISCONNECTED;  // stopped - paused
+  //decode state & transition
+  new_state = transition = -1;
+  if ( strcasecmp (statusString,      "paused")  == 0 ) new_state = STATE_CONNECTED;
+  else if ( strcasecmp (statusString, "playing") == 0 ) new_state = STATE_PLAYING;
+  else if ( strcasecmp (statusString, "stopped") == 0 ) new_state = STATE_DISCONNECTED;  // stopped - paused
 
-//  if (new_state >= 0)
-//  {
-//    transition = io_data->prev_state << 4 | new_state;
-//    io_data->prev_state = new_state;
-//  }
+  if (new_state >= 0)
+  {
+    transition = io_data->prev_state << 4 | new_state;
+    io_data->prev_state = new_state;
+  }
 
-//  debug_print ("new_state (%d)####\n", new_state);
-
-//  //our treatment of sink and source is a bit different
-//  switch (write)
-//  {
-//    case 0: // bt sink: bt --> alsa
-//      debug_print ("AUDIO SOURCE : bt --> alsa\n");
-//      when_to_acquire = STATE_CONNECTED << 4 | STATE_PLAYING;
-//      when_to_release = STATE_PLAYING << 4 | STATE_CONNECTED;
-//      break;
-
-//    case 1: // bt source: alsa --> bt
-//      debug_print ("AUDIO SINK : alsa --> bt\n");
-//      when_to_acquire = STATE_DISCONNECTED << 4 | STATE_CONNECTED;
-//      when_to_release = STATE_CONNECTED << 4 | STATE_DISCONNECTED;
-//      break;
-//  }
+  //our treatment of sink and source is a bit different
+  if(io_data->write == 0)
+  {
+      // bt sink: bt --> alsa
+      debug_print ("AUDIO SOURCE : bt --> alsa\n");
+      when_to_acquire = STATE_CONNECTED << 4 | STATE_PLAYING;
+      when_to_release = STATE_PLAYING << 4 | STATE_CONNECTED;
+  }
+  else if(io_data->write == 1)
+  {
+      // bt source: alsa --> bt
+      debug_print ("AUDIO SINK : alsa --> bt\n");
+      when_to_acquire = STATE_DISCONNECTED << 4 | STATE_CONNECTED;
+      when_to_release = STATE_CONNECTED << 4 | STATE_DISCONNECTED;
+  }
 
 //  debug_print ("transition (%d) - when_to_acquire (%d)####\n", transition, when_to_acquire);
 
@@ -1283,9 +1335,21 @@ void audiosource_property_changed (DBusConnection *conn, DBusMessage *msg, int w
     if (transport_acquire(conn, io_data->transport_path, &io_data->fd, &io_data->read_mtu, &io_data->write_mtu))
     {
       debug_print ("[DEBUG] - Audio streaming START - READ/WRITE \n");
-      debug_print ("fd: %d read mtu %d write mtu %d\n", io_data->fd, io_data->read_mtu, io_data->write_mtu);
       io_thread_set_command (io_data, IO_CMD_RUNNING);
-      pthread_create (&io_data->t_audio_handle, NULL, stream_bt_input, io_data);
+//      if(io_data->streamStatus == 0)
+//      {
+        debug_print ("fd: %d read mtu %d write mtu %d\n", io_data->fd, io_data->read_mtu, io_data->write_mtu);
+        if(io_data->write == 0)
+        {
+          debug_print (">>>>>>PHONE>>>>\n");
+          pthread_create(&io_data->t_audio_handle, NULL, pa_push, io_data);
+        }
+        else if(io_data->write == 1)
+        {
+          debug_print (">>>>>>HEADSET>>>>\n");
+          pthread_create(&io_data->t_audio_handle, NULL, stream_bt_output, io_data);
+        }
+//      }
       statusString = "stopped";
       new_state = transition = -1;
     }
@@ -1297,8 +1361,9 @@ void audiosource_property_changed (DBusConnection *conn, DBusMessage *msg, int w
   else
   {
     debug_print ("[DEBUG] - Audio streaming STOP\n");
-    transport_release (conn, io_data->transport_path);
+    pthread_cancel(io_data->t_audio_handle);
     io_thread_set_command (io_data, IO_CMD_IDLE);
+    transport_release (conn, io_data->transport_path, io_data);
   }
   return;
 
@@ -1351,6 +1416,7 @@ io_thread_tcb_s *create_io_thread()
   pthread_mutex_init (&p->mutex, NULL);
   threadId++;
   p->devId = threadId;
+  p->streamStatus = 0;
   debug_print ("\n THREADid : %d\n", threadId);
   pthread_create (&p->t_handle, NULL, io_thread_run, p);
   return p;
@@ -1446,14 +1512,14 @@ static int setup_handle(snd_pcm_t *handle, unsigned int rate, snd_pcm_uframes_t 
      * @param [in] run_once global variable
      * @param [out] quit global variable (if the app should quit)
      *********************/
-void stream_bt_output(io_thread_tcb_s *data)
+void *stream_bt_output(void *ptr)
 {
+  debug_print ("write to bt -> Headset\n");
+  io_thread_tcb_s *data = ptr;
   void *buf, *encode_buf;
   size_t bufsize, encode_bufsize;
-  struct pollfd pollin = { 0, POLLIN, 0 }, pollout = { data->fd, POLLOUT, 0 };
+  struct pollfd  pollout = { data->fd, POLLOUT, 0 };
   int timeout;
-
-  debug_print ("write to bt - Headset\n");
 
   // get buffers
   encode_bufsize = data->write_mtu;
@@ -1491,7 +1557,7 @@ void stream_bt_output(io_thread_tcb_s *data)
     ssize_t readlen;
     /// READ FROM PCM CAPTURE ...................................................
 
-    debug_print("[DEBUG PHONE] step 1 \n");
+    debug_print("[DEBUG] step 1 \n");
 
     int persize = bufsize;
     snd_pcm_sframes_t received_frames = 0;
@@ -1537,6 +1603,8 @@ void stream_bt_output(io_thread_tcb_s *data)
 
       if (encoded <= 0)
       {
+        data->streamStatus == 0;
+        pthread_exit(0);
         //debug_print ("SBC encoding error %zd\n", encoded);
         break; // make do with what have
       }
@@ -1582,230 +1650,508 @@ void stream_bt_output(io_thread_tcb_s *data)
     // write bluetooth
     if (timeout > 0)
     {
-      //debug_print ("flush bluetooth\n");
+      debug_print ("flush bluetooth\n");
       write (data->fd, encode_buf, nbytes);
     }
   }
 
   // cleanup
+  snd_pcm_drain(capture_handle);
   snd_pcm_close(capture_handle);
   free (buf);
   free (encode_buf);
+  debug_print("FINISH\n");
+  data->streamStatus == 0;
+  pthread_exit(0);
 }
 
-/******** bt -> alsa *********//**
-     * Read bluez stream data input, decode it, and write output to stdout
-     * Decoding function is taken from pulseaudio 2.1
-     *
-     * @param [in] I/O thread control block
-     *********************/
-void *stream_bt_input(void *ptr)
+static uint64_t timespec_us(const struct timespec *ts) {
+    return
+        ts->tv_sec * 1000000LLU +
+        ts->tv_nsec / 1000LLU;
+}
+
+void pa_smoother_reset(pa_smoother *s, uint64_t time_offset, bool paused) {
+    assert(s);
+
+    s->px = s->py = 0;
+    s->dp = 1;
+
+    s->ex = s->ey = s->ry = 0;
+    s->de = 1;
+
+    s->history_idx = 0;
+    s->n_history = 0;
+
+    s->last_y = s->last_x = 0;
+
+    s->abc_valid = false;
+
+    s->paused = paused;
+    s->time_offset = s->pause_time = time_offset;
+
+#ifdef DEBUG_DATA
+    pa_log_debug("reset()");
+#endif
+}
+
+pa_smoother* pa_smoother_new(
+        uint64_t adjust_time,
+        uint64_t history_time,
+        bool monotonic,
+        bool smoothing,
+        unsigned min_history,
+        uint64_t time_offset,
+        bool paused) {
+
+
+    assert(adjust_time > 0);
+    assert(history_time > 0);
+    assert(min_history >= 2);
+    assert(min_history <= HISTORY_MAX);
+
+    pa_smoother *s = calloc(1,sizeof(pa_smoother));
+    //s = pa_xnew(pa_smoother, 1);
+    s->adjust_time = adjust_time;
+    s->history_time = history_time;
+    s->min_history = min_history;
+    s->monotonic = monotonic;
+    s->smoothing = smoothing;
+
+    pa_smoother_reset(s, time_offset, paused);
+
+    return s;
+}
+
+static void calc_abc(pa_smoother *s) {
+    uint64_t ex, ey, px, py;
+    int64_t kx, ky;
+    double de, dp;
+
+    assert(s);
+
+    if (s->abc_valid)
+        return;
+
+    /* We have two points: (ex|ey) and (px|py) with two gradients at
+     * these points de and dp. We do a polynomial
+     * interpolation of degree 3 with these 6 values */
+
+    ex = s->ex; ey = s->ey;
+    px = s->px; py = s->py;
+    de = s->de; dp = s->dp;
+
+    assert(ex < px);
+
+    /* To increase the dynamic range and simplify calculation, we
+     * move these values to the origin */
+    kx = (int64_t) px - (int64_t) ex;
+    ky = (int64_t) py - (int64_t) ey;
+
+    /* Calculate a, b, c for y=ax^3+bx^2+cx */
+    s->c = de;
+    s->b = (((double) (3*ky)/ (double) kx - dp - (double) (2*de))) / (double) kx;
+    s->a = (dp/(double) kx - 2*s->b - de/(double) kx) / (double) (3*kx);
+
+    s->abc_valid = true;
+}
+
+
+static void estimate(pa_smoother *s, uint64_t x, uint64_t *y, double *deriv) {
+    assert(s);
+    assert(y);
+
+    if (x >= s->px) {
+        /* Linear interpolation right from px */
+        int64_t t;
+
+//        /* The requested point is right of the point where we wanted
+//         * to be on track again, thus just linearly estimate */
+
+//        t = (int64_t) s->py + (int64_t) llrint(s->dp * (double) (x - s->px));
+
+//        if (t < 0)
+//            t = 0;
+
+//        *y = (uint64_t) t;
+
+//        if (deriv)
+//            *deriv = s->dp;
+
+    } else if (x <= s->ex) {
+//        /* Linear interpolation left from ex */
+//        int64_t t;
+
+//        t = (int64_t) s->ey - (int64_t) llrint(s->de * (double) (s->ex - x));
+
+//        if (t < 0)
+//            t = 0;
+
+//        *y = (uint64_t) t;
+
+//        if (deriv)
+//            *deriv = s->de;
+
+    } else {
+//        /* Spline interpolation between ex and px */
+//        double tx, ty;
+
+//        /* Ok, we're not yet on track, thus let's interpolate, and
+//         * make sure that the first derivative is smooth */
+
+//        calc_abc(s);
+
+//        /* Move to origin */
+//        tx = (double) (x - s->ex);
+
+//        /* Horner scheme */
+//        ty = (tx * (s->c + tx * (s->b + tx * s->a)));
+
+//        /* Move back from origin */
+//        ty += (double) s->ey;
+
+//        *y = ty >= 0 ? (uint64_t) llrint(ty) : 0;
+
+//        /* Horner scheme */
+//        if (deriv)
+//            *deriv = s->c + (tx * (s->b*2 + tx * s->a*3));
+    }
+
+    /* Guarantee monotonicity */
+    if (s->monotonic) {
+
+        if (deriv && *deriv < 0)
+            *deriv = 0;
+    }
+}
+
+
+void pa_smoother_put(pa_smoother *s, uint64_t x, uint64_t y) {
+    uint64_t ney;
+    double nde;
+    bool is_new;
+
+    assert(s);
+
+    /* Fix up x value */
+    if (s->paused)
+        x = s->pause_time;
+
+    x = (x >= s->time_offset) ? x - s->time_offset : 0;
+
+    is_new = x >= s->ex;
+
+    if (is_new) {
+        /* First, we calculate the position we'd estimate for x, so that
+         * we can adjust our position smoothly from this one */
+        estimate(s, x, &ney, &nde);
+        s->ex = x; s->ey = ney; s->de = nde;
+        s->ry = y;
+    }
+
+//    /* Then, we add the new measurement to our history */
+//    add_to_history(s, x, y);
+
+//    /* And determine the average gradient of the history */
+//    s->dp = avg_gradient(s, x);
+
+//    /* And calculate when we want to be on track again */
+//    if (s->smoothing) {
+//        s->px = s->ex + s->adjust_time;
+//        s->py = s->ry + (uint64_t) llrint(s->dp * (double) s->adjust_time);
+//    } else {
+//        s->px = s->ex;
+//        s->py = s->ry;
+//    }
+
+//    s->abc_valid = false;
+}
+
+
+
+void pa_smoother_resume(pa_smoother *s, uint64_t x, bool fix_now) {
+    assert(s);
+
+    if (!s->paused)
+        return;
+
+//    if (x < s->pause_time)
+//        x = s->pause_time;
+
+//    s->paused = false;
+//    s->time_offset += x - s->pause_time;
+
+//    if (fix_now)
+//        pa_smoother_fix_now(s);
+}
+
+void pa_smoother_fix_now(pa_smoother *s) {
+    assert(s);
+
+    s->px = s->ex;
+    s->py = s->ry;
+}
+
+
+
+
+
+
+
+void *pa_push(void *ptr)
 {
   io_thread_tcb_s *data = ptr;
-  debug_print (">> NUMBER of DEVICES (%d) <<\n",data->devId);
+  int r;
+  snd_pcm_hw_params_t *hwparams;
+  snd_pcm_sw_params_t *swparams;
+  snd_pcm_status_t *status;
+  unsigned rate = 44100;
+  unsigned periods = 2;
+  snd_pcm_uframes_t boundary, buffer_size = 44100 / 10; /* 100s - 44100/10 */
+  int dir = 1;
+  struct pollfd *pollfds;
+  int n_pollfd;
 
-  void *buf, *decode_buf;
-  size_t bufsize, decode_bufsize;
-  struct pollfd pollin = { data->fd, POLLIN, 0 }, pollout = { 1, POLLOUT, 0 };
+  //snd_pcm_t *data->pcm;
+
+  /// *************************************
+
+  struct pollfd pollin = { data->fd, POLLIN, 0 };
   int timeout;
+  size_t bufsize, decode_bufsize;
+  void *buf, *decode_buf;
 
-  char *buff;
-  unsigned int pcm, tmp;
-  int rate, channels, buff_size;
+  /// *************************************
 
-  snd_pcm_t *pcm_handle;
-  snd_pcm_uframes_t frames;
-  snd_pcm_hw_params_t *params;
+  snd_pcm_hw_params_alloca(&hwparams);
+  snd_pcm_sw_params_alloca(&swparams);
+  snd_pcm_status_alloca(&status);
 
-  /* Open the PCM device in playback mode */
-  rate 	   = 44100;
-  channels = 2;     // 2 - A2dp audio ; 1 - HFP audio
+if(data->devId == 1)
+{
+  r = snd_pcm_open(&data->pcm, PCM_DEVICE, SND_PCM_STREAM_PLAYBACK, 0);
+  assert(r == 0);
+}
+else
+{
+  r = snd_pcm_open(&data->pcm, PCM_DEVICE_SECOND, SND_PCM_STREAM_PLAYBACK, 0);
+  assert(r == 0);
+}
 
-  // get buffers
-  bufsize = data->read_mtu;
-  buf = malloc (bufsize);
-  decode_bufsize = (bufsize / sbc_get_frame_length (&data->sbc) + 1 ) * //max frames in a packet
-      sbc_get_codesize(&data->sbc);
-  decode_buf = malloc (decode_bufsize);
+  r = snd_pcm_hw_params_any(data->pcm, hwparams);
+assert(r == 0);
+  r = snd_pcm_hw_params_set_rate_resample(data->pcm, hwparams, 1);
+assert(r == 0);
+  r = snd_pcm_hw_params_set_access(data->pcm, hwparams, SND_PCM_ACCESS_RW_INTERLEAVED);
+assert(r == 0);
+  r = snd_pcm_hw_params_set_format(data->pcm, hwparams, SND_PCM_FORMAT_S16_LE);
+assert(r == 0);
+  r = snd_pcm_hw_params_set_rate_near(data->pcm, hwparams, &rate, NULL);
+assert(r == 0);
+  r = snd_pcm_hw_params_set_channels(data->pcm, hwparams, 2);
+assert(r == 0);
+  r = snd_pcm_hw_params_set_periods_integer(data->pcm, hwparams);
+assert(r == 0);
+  r = snd_pcm_hw_params_set_periods_near(data->pcm, hwparams, &periods, &dir);
+assert(r == 0);
+  r = snd_pcm_hw_params_set_buffer_size_near(data->pcm, hwparams, &buffer_size);
+assert(r == 0);
+  r = snd_pcm_hw_params(data->pcm, hwparams);
+assert(r == 0);
+  r = snd_pcm_hw_params_current(data->pcm, hwparams);
+assert(r == 0);
+  r = snd_pcm_sw_params_current(data->pcm, swparams);
+assert(r == 0);
+  r = snd_pcm_sw_params_set_avail_min(data->pcm, swparams, 1);
+assert(r == 0);
+  r = snd_pcm_sw_params_set_period_event(data->pcm, swparams, 0);
+assert(r == 0);
+  r = snd_pcm_hw_params_get_buffer_size(hwparams, &buffer_size);
+assert(r == 0);
+  r = snd_pcm_sw_params_set_start_threshold(data->pcm, swparams, buffer_size);
+assert(r == 0);
+  r = snd_pcm_sw_params_get_boundary(swparams, &boundary);
+assert(r == 0);
+  r = snd_pcm_sw_params_set_stop_threshold(data->pcm, swparams, boundary);
+assert(r == 0);
+  r = snd_pcm_sw_params_set_tstamp_mode(data->pcm, swparams, SND_PCM_TSTAMP_ENABLE);
+assert(r == 0);
+  r = snd_pcm_sw_params(data->pcm, swparams);
+assert(r == 0);
+  r = snd_pcm_prepare(data->pcm);
+assert(r == 0);
+  r = snd_pcm_sw_params_current(data->pcm, swparams);
+assert(r == 0);
+  n_pollfd = snd_pcm_poll_descriptors_count(data->pcm);
+assert(n_pollfd > 0);
+  pollfds = malloc(sizeof(struct pollfd) * n_pollfd);
+assert(pollfds);
+  r = snd_pcm_poll_descriptors(data->pcm, pollfds, n_pollfd);
+assert(r == n_pollfd);
 
-  if(data->devId == 1)
-  {
-    if (pcm = snd_pcm_open(&pcm_handle, PCM_DEVICE, SND_PCM_STREAM_PLAYBACK, 0) < 0)
-    {
-      printf("ERROR: Can't open \"%s\" PCM device. %s\n",
-             PCM_DEVICE, snd_strerror(pcm));
-    }
-  }
-  else
-  {
-    if (pcm = snd_pcm_open(&pcm_handle, PCM_DEVICE_SECOND, SND_PCM_STREAM_PLAYBACK, 0) < 0)
-    {
-      printf("ERROR: Can't open \"%s\" PCM device. %s\n",
-             PCM_DEVICE_SECOND, snd_strerror(pcm));
-    }
-  }
+  printf("Starting. Buffer size is %u frames\n", (unsigned int) buffer_size);
 
-  /* Allocate parameters object and fill it with default values*/
-  snd_pcm_hw_params_alloca(&params);
+  time_t mytime = time((time_t*)0);
+  pa_smoother *read_smoother = pa_smoother_new(1000000ULL, 2*1000000ULL, true, true, 10, mytime, true);
 
-  snd_pcm_hw_params_any(pcm_handle, params);
-
-  /* Set parameters */
-  if (pcm = snd_pcm_hw_params_set_access(pcm_handle, params,
-                                         SND_PCM_ACCESS_RW_INTERLEAVED) < 0)
-    debug_print("ERROR: Can't set interleaved mode. %s\n", snd_strerror(pcm));
-
-  if (pcm = snd_pcm_hw_params_set_format(pcm_handle, params, SND_PCM_FORMAT_S16_LE) < 0)
-    debug_print("ERROR: Can't set format. %s\n", snd_strerror(pcm));
-
-  if (pcm = snd_pcm_hw_params_set_channels(pcm_handle, params, channels) < 0)
-    printf("ERROR: Can't set channels number. %s\n", snd_strerror(pcm));
-
-  if (pcm = snd_pcm_hw_params_set_rate_near(pcm_handle, params, &rate, 0) < 0)
-    debug_print("ERROR: Can't set rate. %s\n", snd_strerror(pcm));
-
-  /* Write parameters */
-  if (pcm = snd_pcm_hw_params(pcm_handle, params) < 0)
-    printf("ERROR: Can't set harware parameters. %s\n", snd_strerror(pcm));
-
-  snd_pcm_hw_params_get_channels(params, &tmp);
-
-  snd_pcm_hw_params_get_rate(params, &tmp, 0);
-  //debug_print("rate: %d bps\n", tmp);
-
-  /* Allocate buffer to hold single period */
-  snd_pcm_hw_params_get_period_size(params, &frames, 0);
-
-  buff_size = frames * channels * 2 /* 2 -> sample size */;
-  buff = (char *) malloc(buff_size);
-
-  snd_pcm_hw_params_get_period_time(params, &tmp, NULL);
-
-  // Get the buffer size.
-  snd_pcm_uframes_t bufferSize;
-  snd_pcm_hw_params_get_buffer_size( params, &bufferSize );
-  debug_print("Init: Buffer size =: %d\n", bufferSize);
-  debug_print("Init: Significant bits for linear samples =  %d\n", snd_pcm_hw_params_get_sbits(params));
-
-  /// ===================================================================================
-
-  // stream
   while (data->command == IO_CMD_RUNNING)
   {
-    ssize_t readlen=0;
+      snd_pcm_sframes_t avail, delay;
+      struct timespec timestamp;
+      unsigned short revents;
+      snd_pcm_state_t state;
+      ssize_t readlen=0;
 
-    // wait until bluetooth has some data
-    pthread_mutex_unlock (&data->mutex);
-    timeout = poll (&pollin, 1, 1000); //delay 1s to allow others to update our state
-    pthread_mutex_lock (&data->mutex);
-    if (timeout == 0) continue;
-    if (timeout < 0)
-    {
-      fprintf (stderr, "bt_read/bluetooth: %d\n", errno);
-      break;
-    }
+      struct rtp_header *header;
+      struct rtp_payload *payload;
 
-    // read bluetooth
-    readlen = read (data->fd, buf, bufsize);
-    if (readlen == 0)
-    { // stream closed
-      data->command = IO_CMD_TERMINATE;
-      pthread_exit(0);
-      continue;
-    }
-    if (readlen < 0)
-    {
-      pthread_exit(0);
-      //continue;
-    }
-
-    // decode a2dp/sbc from pulseaudio
-    //debug_print ("decoding\n");
-    void *p = buf + sizeof(struct rtp_header) + sizeof(struct rtp_payload);
-    size_t to_decode = readlen - sizeof(struct rtp_header) - sizeof(struct rtp_payload);
-    void *d = decode_buf;
-    size_t to_write = decode_bufsize;
-
-    //debug_print("[DEBUG PHONE] decode  (%d) \n", to_decode);
-
-    while (to_decode > 0)
-    {
-      size_t written;
-      size_t decoded;
-
-      decoded = sbc_decode(&data->sbc,
-                           p, to_decode,
-                           d, to_write,
-                           &written);
-
-      if (decoded <= 0)
+      timeout = poll(&pollin, 1, 1000); //delay 1s to allow others to update our state
+      if (timeout == 0) continue;
+      if (timeout < 0)
       {
-        fprintf (stderr, "SBC decoding error %zd\n", decoded);
-        break; // make do with what we have
+        debug_print(">>>>[bt_read/bluetooth]: %d\n", errno);
+        data->streamStatus == 0;
+        break;
       }
 
-      p = (uint8_t*) p + decoded;
-      to_decode -= decoded;
-      d = (uint8_t*) d + written;
-      to_write -= written;
-      //debug_print ("%zu ", decode_bufsize - to_write);
-    }
-    // debug_print ("\n");
+      typeof(data->read_mtu) _a = (data->read_mtu);                 \
+      typeof(data->write_mtu) _b = (data->write_mtu);                 \
 
-    // wait until stdout is ready
-    while (data->command == IO_CMD_RUNNING)
-    {
-      //debug_print ("waiting for stdout\n");
-      pthread_mutex_unlock (&data->mutex);
-      timeout = poll (&pollout, 1, 1000); //delay 1s to allow others to update our state
-      pthread_mutex_lock (&data->mutex);
-      if (timeout == 0) continue;
-      else if (timeout < 0) fprintf (stderr, "bt_read/stdout: %d\n", errno);
-      break;
-    }
+      size_t min_buffer_size = _a > _b ? _a : _b;
 
-    snd_pcm_sframes_t sent_frames = 0;
-    int sent = 0;
+      bufsize = 2 * min_buffer_size;
+      free(buf);
+      free(decode_buf);
+      buf = malloc(bufsize);
 
-    // write stdout
-    if (timeout > 0 && data->command == IO_CMD_RUNNING)
-    {
-      //      write (1, decode_buf, decode_bufsize - to_write);
-      do
+      decode_bufsize = (bufsize / sbc_get_frame_length(&data->sbc) + 1 ) * sbc_get_codesize(&data->sbc);
+      decode_buf = malloc (decode_bufsize);
+
+      // read bluetooth
+      readlen = read(data->fd, buf, bufsize);
+      if (readlen == 0)
       {
-        sent_frames = snd_pcm_writei(pcm_handle,
-                                     (char *) decode_buf + sent,
-                                     snd_pcm_bytes_to_frames(pcm_handle, decode_bufsize - to_write - sent));
-        if(sent_frames < 0)
+        data->command = IO_CMD_TERMINATE;
+        debug_print("============= TERMINATE 1 ===============================================\n");
+        continue;
+      }
+
+      if (readlen < 0)
+      {
+        debug_print("============= TERMINATE 2 ===============================================\n");
+        continue;
+      }
+
+      // smoother
+      //1000000ULL (((readlen / (2 * 2)) * 1000000ULL) / rate);
+      pa_smoother_put(read_smoother, 1000000ULL, (((readlen / (2 * 2)) * 1000000ULL) / rate));
+      pa_smoother_resume(read_smoother, 1000000ULL, true);
+
+      header = buf;
+      payload = (struct rtp_payload*) ((uint8_t*) buf + sizeof(*header));
+
+      void *p = buf + sizeof(*header) + sizeof(*payload);
+      size_t to_decode = readlen - sizeof(*header) - sizeof(*payload);
+
+      void *d = decode_buf;
+      size_t to_write = decode_bufsize;
+
+      while (to_decode > 0)
+      {
+        size_t written;
+        size_t decoded;
+
+        decoded = sbc_decode(&data->sbc,
+                             p, to_decode,
+                             d, to_write,
+                             &written);
+
+        if (decoded <= 0)
         {
-          sent_frames = snd_pcm_recover(pcm_handle, sent_frames, 1);
+          debug_print("SBC decoding error %zd\n", decoded);
           break;
         }
-        sent += snd_pcm_frames_to_bytes(pcm_handle, sent_frames);
-        if(data->devId == 1)
-        {
-          debug_print(">>>>> WRITE =  %d - THREAD (%d)\n", sent_frames, data->devId);
-        }
-        else
-        {
-          debug_print(">>>>> WRITE =  %d - THREAD (%d)\n", sent_frames, data->devId);
-        }
-      }while (sent < (decode_bufsize - to_write));
-    }
+
+        (size_t) decoded <= to_decode;
+        (size_t) decoded == sbc_get_frame_length(&data->sbc);
+
+        (size_t) written == sbc_get_codesize(&data->sbc);
+
+        p = (uint8_t*) p + decoded;
+        to_decode -= decoded;
+        d = (uint8_t*) d + written;
+        to_write -= written;
+      }
+
+      //
+
+      r = poll(pollfds, n_pollfd, 0);
+      assert(r >= 0);
+      r = snd_pcm_poll_descriptors_revents(data->pcm, pollfds, n_pollfd, &revents);
+      assert(r == 0);
+      assert((revents & ~POLLOUT) == 0);
+      avail = snd_pcm_avail(data->pcm);
+      assert(avail >= 0);
+      r = snd_pcm_status(data->pcm, status);
+      assert(r == 0);
+
+      /* This assertion fails from time to time. ALSA seems to be broken */
+      //   assert(avail == (snd_pcm_sframes_t) snd_pcm_status_get_avail(status));
+      //   printf("%lu %lu\n", (unsigned long) avail, (unsigned long) snd_pcm_status_get_avail(status));
+
+      snd_pcm_status_get_htstamp(status, &timestamp);
+      delay = snd_pcm_status_get_delay(status);
+      state = snd_pcm_status_get_state(status);
+
+      //assert(!revents || avail > 0);
+
+      snd_pcm_sframes_t sent_frames = 0;
+      int sent = 0;
+
+      // write stdout
+      do
+      {
+          sent_frames = snd_pcm_writei(data->pcm,
+                                       (char *) decode_buf + sent,
+                                       snd_pcm_bytes_to_frames(data->pcm, decode_bufsize - to_write - sent));
+          if(sent_frames < 0)
+          {
+
+            assert(sent_frames != -EAGAIN);
+
+            if (sent_frames == -EPIPE)
+                debug_print("%s: Buffer underrun! #######", "snd_pcm_writei");
+
+            if (sent_frames == -ESTRPIPE)
+                debug_print("%s: System suspended! #######", "snd_pcm_writei");
+
+            if (snd_pcm_recover(data->pcm, sent_frames, 1) < 0)
+            {
+                debug_print("%s: RECOVER #######!", "snd_pcm_writei");
+                break;
+            }
+          }
+
+          sent += snd_pcm_frames_to_bytes(data->pcm, sent_frames);
+
+          debug_print(">>> READ (%d) - WRITE (%d) - availPCM (%d) - THREAD (%d)\n", readlen, (decode_bufsize - to_write), avail, data->devId);
+
+      }while (sent < (decode_bufsize - to_write) && timeout > 0);
   }
 
   debug_print("FINISH\n");
 
-  // cleanup
-  snd_pcm_drain(pcm_handle);
-  snd_pcm_close(pcm_handle);
-  free(buff);
-
-  free (buf);
-  free (decode_buf);
-
-  pthread_exit(0);
+  snd_pcm_drop(data->pcm);
+  snd_pcm_close(data->pcm);
+  free(buf);
+  free(pollfds);
+  free(decode_buf);
+  data->streamStatus == 0;
+  pthread_exit(100);
 }
+
+
+
 
 /*****************//**
      * Main I/O thread function
@@ -1841,11 +2187,12 @@ void *io_thread_run(void *ptr)
     {
     case IO_CMD_IDLE:
       debug_print ("\nWAIT !!!\n");
+      &data->streamStatus == 0;
       pthread_cond_wait (&data->cond, &data->mutex);
       break;
 
     case IO_CMD_RUNNING:
-      setup_sbc (&data->sbc, &data->cap);
+      setup_sbc(&data->sbc, &data->cap);
       break;
 
     case IO_CMD_TERMINATE:
@@ -1955,7 +2302,9 @@ int main(int argc, char** argv)
   }
   else if (run_source)
   {
-    run_source = media_register_endpoint(system_bus, bt_object, A2DP_SOURCE_ENDPOINT, A2DP_SOURCE_UUID); // alsa --> bt
+    run_source =  media_register_endpoint(system_bus, bt_object, A2DP_SOURCE_ENDPOINT, A2DP_SOURCE_UUID); // alsa --> bt
+    run_sink   =  media_register_endpoint(system_bus, bt_object, A2DP_SINK_ENDPOINT, A2DP_SINK_UUID); // bt --> alsa
+    run_sink   =  media_register_endpoint(system_bus, bt_object, A2DP_SINK_ENDPOINT_SECOND, A2DP_SINK_UUID); // bt --> alsa
   }
   if (!run_source && !run_sink && !run_hfp) return 1;
 
@@ -1986,14 +2335,20 @@ int main(int argc, char** argv)
       if(dbus_message_is_signal(msg, "org.freedesktop.DBus.Properties", "PropertiesChanged")) // bt --> alsa
       {
         //debug_print ("trigger : org.freedesktop.DBus.Properties\n");
-        //audiosource_property_changed (system_bus, msg, deviceType, &io_threads_table);
+        audiosource_property_changed (system_bus, msg, deviceType, &io_threads_table);
       }
       else if (dbus_message_is_method_call (msg, "org.bluez.MediaEndpoint1", "SetConfiguration"))
+      {
         reply = endpoint_set_configuration (msg, &io_threads_table);
+      }
       else if (dbus_message_is_method_call (msg, "org.bluez.MediaEndpoint1", "SelectConfiguration"))
+      {
         reply = endpoint_select_configuration (msg);
+      }
       else if(dbus_message_is_method_call (msg, "org.bluez.MediaEndpoint1", "ClearConfiguration"))
+      {
         reply = endpoint_clear_configuration (msg, &io_threads_table);
+      }
       else if (dbus_message_is_method_call (msg, "org.bluez.MediaEndpoint1", "Release"))
       { reply = endpoint_release (msg); quit=1; }
       if (reply)
