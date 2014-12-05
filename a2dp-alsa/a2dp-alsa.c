@@ -83,35 +83,35 @@
 // structs and prototypes
 
 struct pa_smoother {
-    uint64_t adjust_time, history_time;
+  uint64_t adjust_time, history_time;
 
-    uint64_t time_offset;
+  uint64_t time_offset;
 
-    uint64_t px, py;     /* Point p, where we want to reach stability */
-    double dp;            /* Gradient we want at point p */
+  uint64_t px, py;     /* Point p, where we want to reach stability */
+  double dp;            /* Gradient we want at point p */
 
-    uint64_t ex, ey;     /* Point e, which we estimated before and need to smooth to */
-    double de;            /* Gradient we estimated for point e */
-    uint64_t ry;         /* The original y value for ex */
+  uint64_t ex, ey;     /* Point e, which we estimated before and need to smooth to */
+  double de;            /* Gradient we estimated for point e */
+  uint64_t ry;         /* The original y value for ex */
 
-                          /* History of last measurements */
-    uint64_t history_x[HISTORY_MAX], history_y[HISTORY_MAX];
-    unsigned history_idx, n_history;
+  /* History of last measurements */
+  uint64_t history_x[HISTORY_MAX], history_y[HISTORY_MAX];
+  unsigned history_idx, n_history;
 
-    /* To even out for monotonicity */
-    uint64_t last_y, last_x;
+  /* To even out for monotonicity */
+  uint64_t last_y, last_x;
 
-    /* Cached parameters for our interpolation polynomial y=ax^3+b^2+cx */
-    double a, b, c;
-    bool abc_valid:1;
+  /* Cached parameters for our interpolation polynomial y=ax^3+b^2+cx */
+  double a, b, c;
+  bool abc_valid:1;
 
-    bool monotonic:1;
-    bool paused:1;
-    bool smoothing:1; /* If false we skip the polynomial interpolation step */
+  bool monotonic:1;
+  bool paused:1;
+  bool smoothing:1; /* If false we skip the polynomial interpolation step */
 
-    uint64_t pause_time;
+  uint64_t pause_time;
 
-    unsigned min_history;
+  unsigned min_history;
 };
 
 typedef struct
@@ -389,70 +389,70 @@ int phone_register_endpoint(DBusConnection* conn, char *bt_object, char *endpoin
 //static void register_endpoint(pa_bluetooth_discovery *y, const char *path, const char *endpoint, const char *uuid) {
 int new_register_endpoint( DBusConnection* conn, char *path, char *endpoint, char *uuid)
 {
-    DBusMessage *msg;
-    DBusMessage  *reply;
-    DBusMessageIter i, d;
-    uint8_t codec = 0;
-    DBusError err;
+  DBusMessage *msg;
+  DBusMessage  *reply;
+  DBusMessageIter i, d;
+  uint8_t codec = 0;
+  DBusError err;
 
-    debug_print("Registering %s on adapter %s.", endpoint, path);
+  debug_print("Registering %s on adapter %s.", endpoint, path);
 
-    dbus_error_init(&err);
-    msg = dbus_message_new_method_call("org.bluez", path, "org.bluez.Media1", "RegisterEndpoint");
-    dbus_message_iter_init_append(msg, &i);
-    dbus_message_iter_append_basic(&i, DBUS_TYPE_OBJECT_PATH, &endpoint);
+  dbus_error_init(&err);
+  msg = dbus_message_new_method_call("org.bluez", path, "org.bluez.Media1", "RegisterEndpoint");
+  dbus_message_iter_init_append(msg, &i);
+  dbus_message_iter_append_basic(&i, DBUS_TYPE_OBJECT_PATH, &endpoint);
 
-    dbus_message_iter_open_container(&i, DBUS_TYPE_ARRAY, DBUS_DICT_ENTRY_BEGIN_CHAR_AS_STRING
-                                    DBUS_TYPE_STRING_AS_STRING DBUS_TYPE_VARIANT_AS_STRING DBUS_DICT_ENTRY_END_CHAR_AS_STRING,
-                                    &d);
+  dbus_message_iter_open_container(&i, DBUS_TYPE_ARRAY, DBUS_DICT_ENTRY_BEGIN_CHAR_AS_STRING
+                                   DBUS_TYPE_STRING_AS_STRING DBUS_TYPE_VARIANT_AS_STRING DBUS_DICT_ENTRY_END_CHAR_AS_STRING,
+                                   &d);
 
-    util_add_dict_variant_entry (&d, "UUID",  DBUS_TYPE_STRING, uuid);
+  util_add_dict_variant_entry (&d, "UUID",  DBUS_TYPE_STRING, uuid);
 
-    if (pa_streq(uuid, HFP_AG_UUID) || pa_streq(uuid, HFP_HS_UUID))
-    {
-        debug_print("<<HFP\n");
-        util_add_dict_variant_entry (&d, "Codec", DBUS_TYPE_BYTE, HFP_AUDIO_CODEC_CVSD);
-        uint8_t capability = 0;
-        //pa_dbus_append_basic_array_variant_dict_entry(&d, "Capabilities", DBUS_TYPE_BYTE, &capability, 1);
-        util_add_dict_array_entry (&d, "Capabilities", DBUS_TYPE_BYTE, &capability, 1);
-    }
-    else
-    {
-        debug_print("<<A2DP\n");
+  if (pa_streq(uuid, HFP_AG_UUID) || pa_streq(uuid, HFP_HS_UUID))
+  {
+    debug_print("<<HFP\n");
+    util_add_dict_variant_entry (&d, "Codec", DBUS_TYPE_BYTE, HFP_AUDIO_CODEC_CVSD);
+    uint8_t capability = 0;
+    //pa_dbus_append_basic_array_variant_dict_entry(&d, "Capabilities", DBUS_TYPE_BYTE, &capability, 1);
+    util_add_dict_array_entry (&d, "Capabilities", DBUS_TYPE_BYTE, &capability, 1);
+  }
+  else
+  {
+    debug_print("<<A2DP\n");
 
-        util_add_dict_variant_entry (&d, "Codec", DBUS_TYPE_BYTE, A2DP_CODEC_SBC);
+    util_add_dict_variant_entry (&d, "Codec", DBUS_TYPE_BYTE, A2DP_CODEC_SBC);
 
-        a2dp_sbc_t capabilities;
+    a2dp_sbc_t capabilities;
 
-        capabilities.channel_mode = SBC_CHANNEL_MODE_MONO | SBC_CHANNEL_MODE_DUAL_CHANNEL |
-                                    SBC_CHANNEL_MODE_STEREO | SBC_CHANNEL_MODE_JOINT_STEREO;
-        capabilities.frequency = SBC_SAMPLING_FREQ_16000 | SBC_SAMPLING_FREQ_32000 |
-                                 SBC_SAMPLING_FREQ_44100 | SBC_SAMPLING_FREQ_48000;
-        capabilities.allocation_method = SBC_ALLOCATION_SNR | SBC_ALLOCATION_LOUDNESS;
-        capabilities.subbands = SBC_SUBBANDS_4 | SBC_SUBBANDS_8;
-        capabilities.block_length = SBC_BLOCK_LENGTH_4 | SBC_BLOCK_LENGTH_8 |
-                                    SBC_BLOCK_LENGTH_12 | SBC_BLOCK_LENGTH_16;
-        capabilities.min_bitpool = MIN_BITPOOL;
-        capabilities.max_bitpool = MAX_BITPOOL;
+    capabilities.channel_mode = SBC_CHANNEL_MODE_MONO | SBC_CHANNEL_MODE_DUAL_CHANNEL |
+        SBC_CHANNEL_MODE_STEREO | SBC_CHANNEL_MODE_JOINT_STEREO;
+    capabilities.frequency = SBC_SAMPLING_FREQ_16000 | SBC_SAMPLING_FREQ_32000 |
+        SBC_SAMPLING_FREQ_44100 | SBC_SAMPLING_FREQ_48000;
+    capabilities.allocation_method = SBC_ALLOCATION_SNR | SBC_ALLOCATION_LOUDNESS;
+    capabilities.subbands = SBC_SUBBANDS_4 | SBC_SUBBANDS_8;
+    capabilities.block_length = SBC_BLOCK_LENGTH_4 | SBC_BLOCK_LENGTH_8 |
+        SBC_BLOCK_LENGTH_12 | SBC_BLOCK_LENGTH_16;
+    capabilities.min_bitpool = MIN_BITPOOL;
+    capabilities.max_bitpool = MAX_BITPOOL;
 
-        util_add_dict_array_entry (&d, "Capabilities", DBUS_TYPE_BYTE, &capabilities, sizeof (capabilities));
-    }
+    util_add_dict_array_entry (&d, "Capabilities", DBUS_TYPE_BYTE, &capabilities, sizeof (capabilities));
+  }
 
-    dbus_message_iter_close_container(&i, &d);
+  dbus_message_iter_close_container(&i, &d);
 
-    //send_and_add_to_pending(y, m, register_endpoint_reply, pa_xstrdup(endpoint));
+  //send_and_add_to_pending(y, m, register_endpoint_reply, pa_xstrdup(endpoint));
 
-    reply = dbus_connection_send_with_reply_and_block (conn, msg, -1, &err);
-    handle_dbus_error (&err, __FUNCTION__, __LINE__);
-    if (!reply)
-    {
-      fprintf(stderr, "Reply Null\n");
-      return 0;
-    }
+  reply = dbus_connection_send_with_reply_and_block (conn, msg, -1, &err);
+  handle_dbus_error (&err, __FUNCTION__, __LINE__);
+  if (!reply)
+  {
+    fprintf(stderr, "Reply Null\n");
+    return 0;
+  }
 
-    dbus_message_unref(msg);
-    dbus_message_unref(reply);
-    return 1;
+  dbus_message_unref(msg);
+  dbus_message_unref(reply);
+  return 1;
 }
 
 
@@ -1045,7 +1045,7 @@ void callAdded_property_changed (DBusConnection *conn, DBusMessage *msg, int wri
 
   dev_path = (char *)dbus_message_get_path (msg);
   statusString =
-  debug_print ("state for %s: %s\n", dev_path, statusString);
+      debug_print ("state for %s: %s\n", dev_path, statusString);
 
   io_data = head;
 
@@ -1314,30 +1314,30 @@ void audiosource_property_changed (DBusConnection *conn, DBusMessage *msg, int w
   //our treatment of sink and source is a bit different
   if(io_data->write == 0)
   {
-      // bt sink: bt --> alsa
-      debug_print ("AUDIO SOURCE : bt --> alsa\n");
-      when_to_acquire = STATE_CONNECTED << 4 | STATE_PLAYING;
-      when_to_release = STATE_PLAYING << 4 | STATE_CONNECTED;
+    // bt sink: bt --> alsa
+    debug_print ("AUDIO SOURCE : bt --> alsa\n");
+    when_to_acquire = STATE_CONNECTED << 4 | STATE_PLAYING;
+    when_to_release = STATE_PLAYING << 4 | STATE_CONNECTED;
   }
   else if(io_data->write == 1)
   {
-      // bt source: alsa --> bt
-      debug_print ("AUDIO SINK : alsa --> bt\n");
-      when_to_acquire = STATE_DISCONNECTED << 4 | STATE_CONNECTED;
-      when_to_release = STATE_CONNECTED << 4 | STATE_DISCONNECTED;
+    // bt source: alsa --> bt
+    debug_print ("AUDIO SINK : alsa --> bt\n");
+    when_to_acquire = STATE_DISCONNECTED << 4 | STATE_CONNECTED;
+    when_to_release = STATE_CONNECTED << 4 | STATE_DISCONNECTED;
   }
 
-//  debug_print ("transition (%d) - when_to_acquire (%d)####\n", transition, when_to_acquire);
+  //  debug_print ("transition (%d) - when_to_acquire (%d)####\n", transition, when_to_acquire);
 
   //acquire or release transport depending on the transitions
   if (strcasecmp (statusString, "playing") == 0)
   {
-    if (transport_acquire(conn, io_data->transport_path, &io_data->fd, &io_data->read_mtu, &io_data->write_mtu))
+    io_thread_set_command (io_data, IO_CMD_RUNNING);
+    if(io_data->streamStatus == 0)
     {
-      debug_print ("[DEBUG] - Audio streaming START - READ/WRITE \n");
-      io_thread_set_command (io_data, IO_CMD_RUNNING);
-//      if(io_data->streamStatus == 0)
-//      {
+      if (transport_acquire(conn, io_data->transport_path, &io_data->fd, &io_data->read_mtu, &io_data->write_mtu))
+      {
+        debug_print ("[DEBUG] - Audio streaming START - READ/WRITE \n");
         debug_print ("fd: %d read mtu %d write mtu %d\n", io_data->fd, io_data->read_mtu, io_data->write_mtu);
         if(io_data->write == 0)
         {
@@ -1349,7 +1349,7 @@ void audiosource_property_changed (DBusConnection *conn, DBusMessage *msg, int w
           debug_print (">>>>>>HEADSET>>>>\n");
           pthread_create(&io_data->t_audio_handle, NULL, stream_bt_output, io_data);
         }
-//      }
+      }
       statusString = "stopped";
       new_state = transition = -1;
     }
@@ -1361,9 +1361,9 @@ void audiosource_property_changed (DBusConnection *conn, DBusMessage *msg, int w
   else
   {
     debug_print ("[DEBUG] - Audio streaming STOP\n");
-    pthread_cancel(io_data->t_audio_handle);
-    io_thread_set_command (io_data, IO_CMD_IDLE);
-    transport_release (conn, io_data->transport_path, io_data);
+    //    pthread_cancel(io_data->t_audio_handle);
+        io_thread_set_command (io_data, IO_CMD_IDLE);
+    //    transport_release (conn, io_data->transport_path, io_data);
   }
   return;
 
@@ -1525,7 +1525,7 @@ void *stream_bt_output(void *ptr)
   encode_bufsize = data->write_mtu;
   encode_buf = malloc (encode_bufsize);
   bufsize = (encode_bufsize / sbc_get_frame_length (&data->sbc)) * // max frames allowed in a packet
-  sbc_get_codesize(&data->sbc); // ensure all of our source will fit in a single packet
+      sbc_get_codesize(&data->sbc); // ensure all of our source will fit in a single packet
   buf = malloc (bufsize);
   debug_print ("encode_buf %d buf %d", encode_bufsize, bufsize);
 
@@ -1538,16 +1538,16 @@ void *stream_bt_output(void *ptr)
 
   if((err = snd_pcm_open(&capture_handle, capture_device, SND_PCM_STREAM_CAPTURE, 0)) < 0)
   {
-   debug_print ("cannot open audio device %s (%s)\n", capture_device, snd_strerror(err));
-   return 1;
+    debug_print ("cannot open audio device %s (%s)\n", capture_device, snd_strerror(err));
+    return 1;
   }
 
   if(!setup_handle(capture_handle, rate, &capture_psize))
-   return 1;
+    return 1;
   if((err = snd_pcm_prepare(capture_handle)) < 0)
   {
-   debug_print ("cannot prepare audio interface for use (%s)\n", snd_strerror(err));
-   return 1;
+    debug_print ("cannot prepare audio interface for use (%s)\n", snd_strerror(err));
+    return 1;
   }
   /// ===========================================================================================
 
@@ -1563,15 +1563,15 @@ void *stream_bt_output(void *ptr)
     snd_pcm_sframes_t received_frames = 0;
     int received = 0;
     do{
-        received_frames = snd_pcm_readi(capture_handle,
-                                     (char *)buf + received,
-                                     snd_pcm_bytes_to_frames(capture_handle,persize - received));
-        if(received_frames < 0)
-        {
-            break;
-        }
-        debug_print("READ = rec %d  size %d \n", received, persize);
-        received += snd_pcm_frames_to_bytes(capture_handle, received_frames);
+      received_frames = snd_pcm_readi(capture_handle,
+                                      (char *)buf + received,
+                                      snd_pcm_bytes_to_frames(capture_handle,persize - received));
+      if(received_frames < 0)
+      {
+        break;
+      }
+      debug_print("READ = rec %d  size %d \n", received, persize);
+      received += snd_pcm_frames_to_bytes(capture_handle, received_frames);
     } while (received < persize);
 
     /// .........................................................................
@@ -1666,230 +1666,230 @@ void *stream_bt_output(void *ptr)
 }
 
 static uint64_t timespec_us(const struct timespec *ts) {
-    return
-        ts->tv_sec * 1000000LLU +
-        ts->tv_nsec / 1000LLU;
+  return
+      ts->tv_sec * 1000000LLU +
+      ts->tv_nsec / 1000LLU;
 }
 
 void pa_smoother_reset(pa_smoother *s, uint64_t time_offset, bool paused) {
-    assert(s);
+  assert(s);
 
-    s->px = s->py = 0;
-    s->dp = 1;
+  s->px = s->py = 0;
+  s->dp = 1;
 
-    s->ex = s->ey = s->ry = 0;
-    s->de = 1;
+  s->ex = s->ey = s->ry = 0;
+  s->de = 1;
 
-    s->history_idx = 0;
-    s->n_history = 0;
+  s->history_idx = 0;
+  s->n_history = 0;
 
-    s->last_y = s->last_x = 0;
+  s->last_y = s->last_x = 0;
 
-    s->abc_valid = false;
+  s->abc_valid = false;
 
-    s->paused = paused;
-    s->time_offset = s->pause_time = time_offset;
+  s->paused = paused;
+  s->time_offset = s->pause_time = time_offset;
 
 #ifdef DEBUG_DATA
-    pa_log_debug("reset()");
+  pa_log_debug("reset()");
 #endif
 }
 
 pa_smoother* pa_smoother_new(
-        uint64_t adjust_time,
-        uint64_t history_time,
-        bool monotonic,
-        bool smoothing,
-        unsigned min_history,
-        uint64_t time_offset,
-        bool paused) {
+    uint64_t adjust_time,
+    uint64_t history_time,
+    bool monotonic,
+    bool smoothing,
+    unsigned min_history,
+    uint64_t time_offset,
+    bool paused) {
 
 
-    assert(adjust_time > 0);
-    assert(history_time > 0);
-    assert(min_history >= 2);
-    assert(min_history <= HISTORY_MAX);
+  assert(adjust_time > 0);
+  assert(history_time > 0);
+  assert(min_history >= 2);
+  assert(min_history <= HISTORY_MAX);
 
-    pa_smoother *s = calloc(1,sizeof(pa_smoother));
-    //s = pa_xnew(pa_smoother, 1);
-    s->adjust_time = adjust_time;
-    s->history_time = history_time;
-    s->min_history = min_history;
-    s->monotonic = monotonic;
-    s->smoothing = smoothing;
+  pa_smoother *s = calloc(1,sizeof(pa_smoother));
+  //s = pa_xnew(pa_smoother, 1);
+  s->adjust_time = adjust_time;
+  s->history_time = history_time;
+  s->min_history = min_history;
+  s->monotonic = monotonic;
+  s->smoothing = smoothing;
 
-    pa_smoother_reset(s, time_offset, paused);
+  pa_smoother_reset(s, time_offset, paused);
 
-    return s;
+  return s;
 }
 
 static void calc_abc(pa_smoother *s) {
-    uint64_t ex, ey, px, py;
-    int64_t kx, ky;
-    double de, dp;
+  uint64_t ex, ey, px, py;
+  int64_t kx, ky;
+  double de, dp;
 
-    assert(s);
+  assert(s);
 
-    if (s->abc_valid)
-        return;
+  if (s->abc_valid)
+    return;
 
-    /* We have two points: (ex|ey) and (px|py) with two gradients at
+  /* We have two points: (ex|ey) and (px|py) with two gradients at
      * these points de and dp. We do a polynomial
      * interpolation of degree 3 with these 6 values */
 
-    ex = s->ex; ey = s->ey;
-    px = s->px; py = s->py;
-    de = s->de; dp = s->dp;
+  ex = s->ex; ey = s->ey;
+  px = s->px; py = s->py;
+  de = s->de; dp = s->dp;
 
-    assert(ex < px);
+  assert(ex < px);
 
-    /* To increase the dynamic range and simplify calculation, we
+  /* To increase the dynamic range and simplify calculation, we
      * move these values to the origin */
-    kx = (int64_t) px - (int64_t) ex;
-    ky = (int64_t) py - (int64_t) ey;
+  kx = (int64_t) px - (int64_t) ex;
+  ky = (int64_t) py - (int64_t) ey;
 
-    /* Calculate a, b, c for y=ax^3+bx^2+cx */
-    s->c = de;
-    s->b = (((double) (3*ky)/ (double) kx - dp - (double) (2*de))) / (double) kx;
-    s->a = (dp/(double) kx - 2*s->b - de/(double) kx) / (double) (3*kx);
+  /* Calculate a, b, c for y=ax^3+bx^2+cx */
+  s->c = de;
+  s->b = (((double) (3*ky)/ (double) kx - dp - (double) (2*de))) / (double) kx;
+  s->a = (dp/(double) kx - 2*s->b - de/(double) kx) / (double) (3*kx);
 
-    s->abc_valid = true;
+  s->abc_valid = true;
 }
 
 
 static void estimate(pa_smoother *s, uint64_t x, uint64_t *y, double *deriv) {
-    assert(s);
-    assert(y);
+  assert(s);
+  assert(y);
 
-    if (x >= s->px) {
-        /* Linear interpolation right from px */
-        int64_t t;
+  if (x >= s->px) {
+    /* Linear interpolation right from px */
+    int64_t t;
 
-//        /* The requested point is right of the point where we wanted
-//         * to be on track again, thus just linearly estimate */
+    //        /* The requested point is right of the point where we wanted
+    //         * to be on track again, thus just linearly estimate */
 
-//        t = (int64_t) s->py + (int64_t) llrint(s->dp * (double) (x - s->px));
+    //        t = (int64_t) s->py + (int64_t) llrint(s->dp * (double) (x - s->px));
 
-//        if (t < 0)
-//            t = 0;
+    //        if (t < 0)
+    //            t = 0;
 
-//        *y = (uint64_t) t;
+    //        *y = (uint64_t) t;
 
-//        if (deriv)
-//            *deriv = s->dp;
+    //        if (deriv)
+    //            *deriv = s->dp;
 
-    } else if (x <= s->ex) {
-//        /* Linear interpolation left from ex */
-//        int64_t t;
+  } else if (x <= s->ex) {
+    //        /* Linear interpolation left from ex */
+    //        int64_t t;
 
-//        t = (int64_t) s->ey - (int64_t) llrint(s->de * (double) (s->ex - x));
+    //        t = (int64_t) s->ey - (int64_t) llrint(s->de * (double) (s->ex - x));
 
-//        if (t < 0)
-//            t = 0;
+    //        if (t < 0)
+    //            t = 0;
 
-//        *y = (uint64_t) t;
+    //        *y = (uint64_t) t;
 
-//        if (deriv)
-//            *deriv = s->de;
+    //        if (deriv)
+    //            *deriv = s->de;
 
-    } else {
-//        /* Spline interpolation between ex and px */
-//        double tx, ty;
+  } else {
+    //        /* Spline interpolation between ex and px */
+    //        double tx, ty;
 
-//        /* Ok, we're not yet on track, thus let's interpolate, and
-//         * make sure that the first derivative is smooth */
+    //        /* Ok, we're not yet on track, thus let's interpolate, and
+    //         * make sure that the first derivative is smooth */
 
-//        calc_abc(s);
+    //        calc_abc(s);
 
-//        /* Move to origin */
-//        tx = (double) (x - s->ex);
+    //        /* Move to origin */
+    //        tx = (double) (x - s->ex);
 
-//        /* Horner scheme */
-//        ty = (tx * (s->c + tx * (s->b + tx * s->a)));
+    //        /* Horner scheme */
+    //        ty = (tx * (s->c + tx * (s->b + tx * s->a)));
 
-//        /* Move back from origin */
-//        ty += (double) s->ey;
+    //        /* Move back from origin */
+    //        ty += (double) s->ey;
 
-//        *y = ty >= 0 ? (uint64_t) llrint(ty) : 0;
+    //        *y = ty >= 0 ? (uint64_t) llrint(ty) : 0;
 
-//        /* Horner scheme */
-//        if (deriv)
-//            *deriv = s->c + (tx * (s->b*2 + tx * s->a*3));
-    }
+    //        /* Horner scheme */
+    //        if (deriv)
+    //            *deriv = s->c + (tx * (s->b*2 + tx * s->a*3));
+  }
 
-    /* Guarantee monotonicity */
-    if (s->monotonic) {
+  /* Guarantee monotonicity */
+  if (s->monotonic) {
 
-        if (deriv && *deriv < 0)
-            *deriv = 0;
-    }
+    if (deriv && *deriv < 0)
+      *deriv = 0;
+  }
 }
 
 
 void pa_smoother_put(pa_smoother *s, uint64_t x, uint64_t y) {
-    uint64_t ney;
-    double nde;
-    bool is_new;
+  uint64_t ney;
+  double nde;
+  bool is_new;
 
-    assert(s);
+  assert(s);
 
-    /* Fix up x value */
-    if (s->paused)
-        x = s->pause_time;
+  /* Fix up x value */
+  if (s->paused)
+    x = s->pause_time;
 
-    x = (x >= s->time_offset) ? x - s->time_offset : 0;
+  x = (x >= s->time_offset) ? x - s->time_offset : 0;
 
-    is_new = x >= s->ex;
+  is_new = x >= s->ex;
 
-    if (is_new) {
-        /* First, we calculate the position we'd estimate for x, so that
+  if (is_new) {
+    /* First, we calculate the position we'd estimate for x, so that
          * we can adjust our position smoothly from this one */
-        estimate(s, x, &ney, &nde);
-        s->ex = x; s->ey = ney; s->de = nde;
-        s->ry = y;
-    }
+    estimate(s, x, &ney, &nde);
+    s->ex = x; s->ey = ney; s->de = nde;
+    s->ry = y;
+  }
 
-//    /* Then, we add the new measurement to our history */
-//    add_to_history(s, x, y);
+  //    /* Then, we add the new measurement to our history */
+  //    add_to_history(s, x, y);
 
-//    /* And determine the average gradient of the history */
-//    s->dp = avg_gradient(s, x);
+  //    /* And determine the average gradient of the history */
+  //    s->dp = avg_gradient(s, x);
 
-//    /* And calculate when we want to be on track again */
-//    if (s->smoothing) {
-//        s->px = s->ex + s->adjust_time;
-//        s->py = s->ry + (uint64_t) llrint(s->dp * (double) s->adjust_time);
-//    } else {
-//        s->px = s->ex;
-//        s->py = s->ry;
-//    }
+  //    /* And calculate when we want to be on track again */
+  //    if (s->smoothing) {
+  //        s->px = s->ex + s->adjust_time;
+  //        s->py = s->ry + (uint64_t) llrint(s->dp * (double) s->adjust_time);
+  //    } else {
+  //        s->px = s->ex;
+  //        s->py = s->ry;
+  //    }
 
-//    s->abc_valid = false;
+  //    s->abc_valid = false;
 }
 
 
 
 void pa_smoother_resume(pa_smoother *s, uint64_t x, bool fix_now) {
-    assert(s);
+  assert(s);
 
-    if (!s->paused)
-        return;
+  if (!s->paused)
+    return;
 
-//    if (x < s->pause_time)
-//        x = s->pause_time;
+  //    if (x < s->pause_time)
+  //        x = s->pause_time;
 
-//    s->paused = false;
-//    s->time_offset += x - s->pause_time;
+  //    s->paused = false;
+  //    s->time_offset += x - s->pause_time;
 
-//    if (fix_now)
-//        pa_smoother_fix_now(s);
+  //    if (fix_now)
+  //        pa_smoother_fix_now(s);
 }
 
 void pa_smoother_fix_now(pa_smoother *s) {
-    assert(s);
+  assert(s);
 
-    s->px = s->ex;
-    s->py = s->ry;
+  s->px = s->ex;
+  s->py = s->ry;
 }
 
 
@@ -1914,239 +1914,243 @@ void *pa_push(void *ptr)
 
   //snd_pcm_t *data->pcm;
 
-  /// *************************************
+  /// ********************************************
 
-  struct pollfd pollin = { data->fd, POLLIN, 0 };
   int timeout;
   size_t bufsize, decode_bufsize;
   void *buf, *decode_buf;
 
-  /// *************************************
+  /// ********************************************
 
   snd_pcm_hw_params_alloca(&hwparams);
   snd_pcm_sw_params_alloca(&swparams);
   snd_pcm_status_alloca(&status);
 
-if(data->devId == 1)
-{
-  r = snd_pcm_open(&data->pcm, PCM_DEVICE, SND_PCM_STREAM_PLAYBACK, 0);
-  assert(r == 0);
-}
-else
-{
-  r = snd_pcm_open(&data->pcm, PCM_DEVICE_SECOND, SND_PCM_STREAM_PLAYBACK, 0);
-  assert(r == 0);
-}
+  if(data->devId == 1)
+  {
+    r = snd_pcm_open(&data->pcm, PCM_DEVICE, SND_PCM_STREAM_PLAYBACK, 0);
+    assert(r == 0);
+  }
+  else
+  {
+    r = snd_pcm_open(&data->pcm, PCM_DEVICE_SECOND, SND_PCM_STREAM_PLAYBACK, 0);
+    assert(r == 0);
+  }
 
   r = snd_pcm_hw_params_any(data->pcm, hwparams);
-assert(r == 0);
+  assert(r == 0);
   r = snd_pcm_hw_params_set_rate_resample(data->pcm, hwparams, 1);
-assert(r == 0);
+  assert(r == 0);
   r = snd_pcm_hw_params_set_access(data->pcm, hwparams, SND_PCM_ACCESS_RW_INTERLEAVED);
-assert(r == 0);
+  assert(r == 0);
   r = snd_pcm_hw_params_set_format(data->pcm, hwparams, SND_PCM_FORMAT_S16_LE);
-assert(r == 0);
+  assert(r == 0);
   r = snd_pcm_hw_params_set_rate_near(data->pcm, hwparams, &rate, NULL);
-assert(r == 0);
+  assert(r == 0);
   r = snd_pcm_hw_params_set_channels(data->pcm, hwparams, 2);
-assert(r == 0);
+  assert(r == 0);
   r = snd_pcm_hw_params_set_periods_integer(data->pcm, hwparams);
-assert(r == 0);
+  assert(r == 0);
   r = snd_pcm_hw_params_set_periods_near(data->pcm, hwparams, &periods, &dir);
-assert(r == 0);
+  assert(r == 0);
   r = snd_pcm_hw_params_set_buffer_size_near(data->pcm, hwparams, &buffer_size);
-assert(r == 0);
+  assert(r == 0);
   r = snd_pcm_hw_params(data->pcm, hwparams);
-assert(r == 0);
+  assert(r == 0);
   r = snd_pcm_hw_params_current(data->pcm, hwparams);
-assert(r == 0);
+  assert(r == 0);
   r = snd_pcm_sw_params_current(data->pcm, swparams);
-assert(r == 0);
+  assert(r == 0);
   r = snd_pcm_sw_params_set_avail_min(data->pcm, swparams, 1);
-assert(r == 0);
+  assert(r == 0);
   r = snd_pcm_sw_params_set_period_event(data->pcm, swparams, 0);
-assert(r == 0);
+  assert(r == 0);
   r = snd_pcm_hw_params_get_buffer_size(hwparams, &buffer_size);
-assert(r == 0);
+  assert(r == 0);
   r = snd_pcm_sw_params_set_start_threshold(data->pcm, swparams, buffer_size);
-assert(r == 0);
+  assert(r == 0);
   r = snd_pcm_sw_params_get_boundary(swparams, &boundary);
-assert(r == 0);
+  assert(r == 0);
   r = snd_pcm_sw_params_set_stop_threshold(data->pcm, swparams, boundary);
-assert(r == 0);
+  assert(r == 0);
   r = snd_pcm_sw_params_set_tstamp_mode(data->pcm, swparams, SND_PCM_TSTAMP_ENABLE);
-assert(r == 0);
+  assert(r == 0);
   r = snd_pcm_sw_params(data->pcm, swparams);
-assert(r == 0);
+  assert(r == 0);
   r = snd_pcm_prepare(data->pcm);
-assert(r == 0);
+  assert(r == 0);
   r = snd_pcm_sw_params_current(data->pcm, swparams);
-assert(r == 0);
+  assert(r == 0);
   n_pollfd = snd_pcm_poll_descriptors_count(data->pcm);
-assert(n_pollfd > 0);
+  assert(n_pollfd > 0);
   pollfds = malloc(sizeof(struct pollfd) * n_pollfd);
-assert(pollfds);
+  assert(pollfds);
   r = snd_pcm_poll_descriptors(data->pcm, pollfds, n_pollfd);
-assert(r == n_pollfd);
+  assert(r == n_pollfd);
 
   printf("Starting. Buffer size is %u frames\n", (unsigned int) buffer_size);
+  struct pollfd pollin = { data->fd, POLLIN, 0 };
 
-  time_t mytime = time((time_t*)0);
-  pa_smoother *read_smoother = pa_smoother_new(1000000ULL, 2*1000000ULL, true, true, 10, mytime, true);
+  snd_pcm_sframes_t avail, delay;
+  struct timespec timestamp;
+  unsigned short revents;
+  snd_pcm_state_t state;
+  ssize_t readlen=0;
+  struct rtp_header *header;
+  struct rtp_payload *payload;
 
-  while (data->command == IO_CMD_RUNNING)
+  size_t written;
+  size_t decoded;
+
+  snd_pcm_sframes_t sent_frames = 0;
+  int sent = 0;
+
+  for(;;)
   {
-      snd_pcm_sframes_t avail, delay;
-      struct timespec timestamp;
-      unsigned short revents;
-      snd_pcm_state_t state;
-      ssize_t readlen=0;
+    timeout = poll(&pollin, 1, 1000); //delay 1s to allow others to update our state
+    debug_print("......................................(%d)\n",timeout);
+    if (timeout == 0)
+    {
+      continue;
+    }
+    else if (timeout < 0)
+    {
+      data->command = IO_CMD_IDLE;
+      //break;
+    }
 
-      struct rtp_header *header;
-      struct rtp_payload *payload;
 
-      timeout = poll(&pollin, 1, 1000); //delay 1s to allow others to update our state
-      if (timeout == 0) continue;
-      if (timeout < 0)
+  while(POLLIN == (pollin.revents & POLLIN) && timeout > 0)
+  {
+    debug_print(".......POLL in .....\n");
+
+
+    typeof(data->read_mtu) _a = (data->read_mtu);                 \
+    typeof(data->write_mtu) _b = (data->write_mtu);                 \
+
+    size_t min_buffer_size = _a > _b ? _a : _b;
+
+    bufsize = 2 * min_buffer_size;
+    free(buf);
+    free(decode_buf);
+    buf = malloc(bufsize);
+
+    decode_bufsize = (bufsize / sbc_get_frame_length(&data->sbc) + 1 ) * sbc_get_codesize(&data->sbc);
+    decode_buf = malloc (decode_bufsize);
+
+    // read bluetooth
+    readlen = read(data->fd, buf, bufsize);
+    if (readlen == 0)
+    {
+      //data->command = IO_CMD_TERMINATE;
+      debug_print("============= TERMINATE 1 ===============================================\n");
+      continue;
+    }
+    else if (readlen < 0)
+    {
+      debug_print("============= TERMINATE 2 ===============================================\n");
+      //continue;
+        data->streamStatus = 0;
+        snd_pcm_drop(data->pcm);
+        snd_pcm_close(data->pcm);
+        free(buf);
+        free(pollfds);
+        free(decode_buf);
+        pthread_exit(0);
+    }
+
+    header = buf;
+    payload = (struct rtp_payload*) ((uint8_t*) buf + sizeof(*header));
+
+    void *p = buf + sizeof(*header) + sizeof(*payload);
+    size_t to_decode = readlen - sizeof(*header) - sizeof(*payload);
+
+    void *d = decode_buf;
+    size_t to_write = decode_bufsize;
+
+    while (to_decode > 0)
+    {
+      decoded = sbc_decode(&data->sbc,
+                           p, to_decode,
+                           d, to_write,
+                           &written);
+
+      if (decoded <= 0)
       {
-        debug_print(">>>>[bt_read/bluetooth]: %d\n", errno);
-        data->streamStatus == 0;
+        debug_print("SBC decoding error %zd\n", decoded);
         break;
       }
 
-      typeof(data->read_mtu) _a = (data->read_mtu);                 \
-      typeof(data->write_mtu) _b = (data->write_mtu);                 \
+      (size_t) decoded <= to_decode;
+      (size_t) decoded == sbc_get_frame_length(&data->sbc);
 
-      size_t min_buffer_size = _a > _b ? _a : _b;
+      (size_t) written == sbc_get_codesize(&data->sbc);
 
-      bufsize = 2 * min_buffer_size;
-      free(buf);
-      free(decode_buf);
-      buf = malloc(bufsize);
+      p = (uint8_t*) p + decoded;
+      to_decode -= decoded;
+      d = (uint8_t*) d + written;
+      to_write -= written;
+    }
 
-      decode_bufsize = (bufsize / sbc_get_frame_length(&data->sbc) + 1 ) * sbc_get_codesize(&data->sbc);
-      decode_buf = malloc (decode_bufsize);
+    //
 
-      // read bluetooth
-      readlen = read(data->fd, buf, bufsize);
-      if (readlen == 0)
+//    r = poll(pollfds, n_pollfd, 0);
+//    assert(r >= 0);
+//    r = snd_pcm_poll_descriptors_revents(data->pcm, pollfds, n_pollfd, &revents);
+//    assert(r == 0);
+//    assert((revents & ~POLLOUT) == 0);
+//    avail = snd_pcm_avail(data->pcm);
+//    assert(avail >= 0);
+//    r = snd_pcm_status(data->pcm, status);
+//    assert(r == 0);
+
+    /* This assertion fails from time to time. ALSA seems to be broken */
+    //   assert(avail == (snd_pcm_sframes_t) snd_pcm_status_get_avail(status));
+    //   printf("%lu %lu\n", (unsigned long) avail, (unsigned long) snd_pcm_status_get_avail(status));
+
+//    snd_pcm_status_get_htstamp(status, &timestamp);
+//    delay = snd_pcm_status_get_delay(status);
+//    state = snd_pcm_status_get_state(status);
+
+    //assert(!revents || avail > 0);
+
+    sent_frames = 0;
+    sent = 0;
+
+    // write stdout
+    do
+    {
+      sent_frames = snd_pcm_writei(data->pcm,
+                                   (char *) decode_buf + sent,
+                                   snd_pcm_bytes_to_frames(data->pcm, decode_bufsize - to_write - sent));
+      if(sent_frames < 0)
       {
-        data->command = IO_CMD_TERMINATE;
-        debug_print("============= TERMINATE 1 ===============================================\n");
-        continue;
-      }
+        //assert(sent_frames != -EAGAIN);
+        if (sent_frames == -EPIPE)
+          debug_print("%s: Buffer underrun! #######", "snd_pcm_writei");
 
-      if (readlen < 0)
-      {
-        debug_print("============= TERMINATE 2 ===============================================\n");
-        continue;
-      }
+        if (sent_frames == -ESTRPIPE)
+          debug_print("%s: System suspended! #######", "snd_pcm_writei");
 
-      // smoother
-      //1000000ULL (((readlen / (2 * 2)) * 1000000ULL) / rate);
-      pa_smoother_put(read_smoother, 1000000ULL, (((readlen / (2 * 2)) * 1000000ULL) / rate));
-      pa_smoother_resume(read_smoother, 1000000ULL, true);
-
-      header = buf;
-      payload = (struct rtp_payload*) ((uint8_t*) buf + sizeof(*header));
-
-      void *p = buf + sizeof(*header) + sizeof(*payload);
-      size_t to_decode = readlen - sizeof(*header) - sizeof(*payload);
-
-      void *d = decode_buf;
-      size_t to_write = decode_bufsize;
-
-      while (to_decode > 0)
-      {
-        size_t written;
-        size_t decoded;
-
-        decoded = sbc_decode(&data->sbc,
-                             p, to_decode,
-                             d, to_write,
-                             &written);
-
-        if (decoded <= 0)
+        if (snd_pcm_recover(data->pcm, sent_frames, 1) < 0)
         {
-          debug_print("SBC decoding error %zd\n", decoded);
+          debug_print("%s: RECOVER #######!", "snd_pcm_writei");
           break;
         }
-
-        (size_t) decoded <= to_decode;
-        (size_t) decoded == sbc_get_frame_length(&data->sbc);
-
-        (size_t) written == sbc_get_codesize(&data->sbc);
-
-        p = (uint8_t*) p + decoded;
-        to_decode -= decoded;
-        d = (uint8_t*) d + written;
-        to_write -= written;
       }
+      sent += snd_pcm_frames_to_bytes(data->pcm, sent_frames);
 
-      //
-
-      r = poll(pollfds, n_pollfd, 0);
-      assert(r >= 0);
-      r = snd_pcm_poll_descriptors_revents(data->pcm, pollfds, n_pollfd, &revents);
-      assert(r == 0);
-      assert((revents & ~POLLOUT) == 0);
-      avail = snd_pcm_avail(data->pcm);
-      assert(avail >= 0);
-      r = snd_pcm_status(data->pcm, status);
-      assert(r == 0);
-
-      /* This assertion fails from time to time. ALSA seems to be broken */
-      //   assert(avail == (snd_pcm_sframes_t) snd_pcm_status_get_avail(status));
-      //   printf("%lu %lu\n", (unsigned long) avail, (unsigned long) snd_pcm_status_get_avail(status));
-
-      snd_pcm_status_get_htstamp(status, &timestamp);
-      delay = snd_pcm_status_get_delay(status);
-      state = snd_pcm_status_get_state(status);
-
-      //assert(!revents || avail > 0);
-
-      snd_pcm_sframes_t sent_frames = 0;
-      int sent = 0;
-
-      // write stdout
-      do
-      {
-          sent_frames = snd_pcm_writei(data->pcm,
-                                       (char *) decode_buf + sent,
-                                       snd_pcm_bytes_to_frames(data->pcm, decode_bufsize - to_write - sent));
-          if(sent_frames < 0)
-          {
-
-            assert(sent_frames != -EAGAIN);
-
-            if (sent_frames == -EPIPE)
-                debug_print("%s: Buffer underrun! #######", "snd_pcm_writei");
-
-            if (sent_frames == -ESTRPIPE)
-                debug_print("%s: System suspended! #######", "snd_pcm_writei");
-
-            if (snd_pcm_recover(data->pcm, sent_frames, 1) < 0)
-            {
-                debug_print("%s: RECOVER #######!", "snd_pcm_writei");
-                break;
-            }
-          }
-
-          sent += snd_pcm_frames_to_bytes(data->pcm, sent_frames);
-
-          debug_print(">>> READ (%d) - WRITE (%d) - availPCM (%d) - THREAD (%d)\n", readlen, (decode_bufsize - to_write), avail, data->devId);
-
-      }while (sent < (decode_bufsize - to_write) && timeout > 0);
+      debug_print(">>> READ (%d) - WRITE (%d) - availPCM (%d) - THREAD (%d)\n", readlen, (decode_bufsize - to_write), avail, data->devId);
+    }while (sent < (decode_bufsize - to_write) && timeout > 0 && data->command == IO_CMD_RUNNING);
+   }
   }
 
   debug_print("FINISH\n");
-
   snd_pcm_drop(data->pcm);
   snd_pcm_close(data->pcm);
   free(buf);
   free(pollfds);
   free(decode_buf);
-  data->streamStatus == 0;
   pthread_exit(100);
 }
 
@@ -2177,7 +2181,7 @@ void *io_thread_run(void *ptr)
 
   // prepare
   debug_print ("starting %p\n", ptr);
-  pthread_mutex_lock (&data->mutex);
+  //pthread_mutex_lock (&data->mutex);
   sbc_init (&data->sbc, 0);
 
   // run
@@ -2187,7 +2191,7 @@ void *io_thread_run(void *ptr)
     {
     case IO_CMD_IDLE:
       debug_print ("\nWAIT !!!\n");
-      &data->streamStatus == 0;
+      &data->streamStatus == 1;
       pthread_cond_wait (&data->cond, &data->mutex);
       break;
 
@@ -2204,7 +2208,7 @@ void *io_thread_run(void *ptr)
 end:
   // cleanup
   sbc_finish(&data->sbc);
-  pthread_mutex_unlock (&data->mutex);
+  //pthread_mutex_unlock (&data->mutex);
   return NULL;
 }
 
