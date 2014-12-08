@@ -125,7 +125,8 @@ typedef struct
   {
     IO_CMD_IDLE = 0,
     IO_CMD_RUNNING,
-    IO_CMD_TERMINATE
+    IO_CMD_TERMINATE,
+    IO_CMD_INIT_PCM
   } command;
 
   enum
@@ -152,6 +153,8 @@ typedef struct
   // codec stuff
   a2dp_sbc_t cap;
   sbc_t sbc;
+
+  DBusConnection *connData;
 
   // persistent stuff for encoding purpose
   uint16_t seq_num;   //cumulative packet number
@@ -1329,41 +1332,49 @@ void audiosource_property_changed (DBusConnection *conn, DBusMessage *msg, int w
 
   //  debug_print ("transition (%d) - when_to_acquire (%d)####\n", transition, when_to_acquire);
 
+  io_data->connData = conn;
+
   //acquire or release transport depending on the transitions
   if (strcasecmp (statusString, "playing") == 0)
   {
-    io_thread_set_command (io_data, IO_CMD_RUNNING);
-    if(io_data->streamStatus == 0)
-    {
+//    if(io_data->streamStatus == 1 || io_data->streamStatus == 2)
+//    {
+//      io_thread_set_command (io_data, IO_CMD_RUNNING);
+//    }
+//    else
+//    {
       if (transport_acquire(conn, io_data->transport_path, &io_data->fd, &io_data->read_mtu, &io_data->write_mtu))
       {
         debug_print ("[DEBUG] - Audio streaming START - READ/WRITE \n");
         debug_print ("fd: %d read mtu %d write mtu %d\n", io_data->fd, io_data->read_mtu, io_data->write_mtu);
+        usleep(100);
+        io_thread_set_command (io_data, IO_CMD_RUNNING);
         if(io_data->write == 0)
         {
-          debug_print (">>>>>>PHONE>>>>\n");
-          pthread_create(&io_data->t_audio_handle, NULL, pa_push, io_data);
+          debug_print(">>>>>>PHONE>>>>\n");
+          //pthread_create(&io_data->t_audio_handle, NULL, pa_push, io_data);
+          //io_thread_set_command (io_data, IO_CMD_RUNNING);
         }
         else if(io_data->write == 1)
         {
-          debug_print (">>>>>>HEADSET>>>>\n");
-          pthread_create(&io_data->t_audio_handle, NULL, stream_bt_output, io_data);
+          debug_print(">>>>>>HEADSET>>>>\n");
+          //pthread_create(&io_data->t_audio_handle, NULL, stream_bt_output, io_data);
+          io_thread_set_command (io_data, IO_CMD_IDLE); // IO_CMD_IDLE IO_CMD_RUNNING
         }
       }
-      statusString = "stopped";
-      new_state = transition = -1;
-    }
-    else
-    {
-      debug_print ("[DEBUG] - ERROR at transport_acquire\n");
-    }
+      else
+      {
+        debug_print("[DEBUG] - ERROR at transport_acquire\n");
+      }
+//    }
+    statusString = "stopped";
+    new_state = transition = -1;
   }
   else
   {
-    debug_print ("[DEBUG] - Audio streaming STOP\n");
-    //    pthread_cancel(io_data->t_audio_handle);
-        io_thread_set_command (io_data, IO_CMD_IDLE);
-    //    transport_release (conn, io_data->transport_path, io_data);
+    debug_print ("\n[DEBUG] - Audio streaming STOP\n");
+    //transport_release (conn, io_data->transport_path, io_data);
+    io_thread_set_command (io_data, IO_CMD_IDLE);
   }
   return;
 
@@ -1894,10 +1905,6 @@ void pa_smoother_fix_now(pa_smoother *s) {
 
 
 
-
-
-
-
 void *pa_push(void *ptr)
 {
   io_thread_tcb_s *data = ptr;
@@ -2181,22 +2188,350 @@ void *io_thread_run(void *ptr)
 
   // prepare
   debug_print ("starting %p\n", ptr);
-  //pthread_mutex_lock (&data->mutex);
+  pthread_mutex_lock (&data->mutex);
   sbc_init (&data->sbc, 0);
 
+
+  //io_thread_tcb_s *data = ptr;
+  int r;
+  snd_pcm_hw_params_t *hwparams;
+  snd_pcm_sw_params_t *swparams;
+  snd_pcm_status_t *status;
+  unsigned rate = 44100;
+  unsigned periods = 2;
+  snd_pcm_uframes_t boundary, buffer_size = 44100 / 10; /* 100s - 44100/10 */
+  int dir = 1;
+  struct pollfd *pollfds;
+  int n_pollfd;
+
+  //snd_pcm_t *data->pcm;
+
+  /// ********************************************
+
+  int timeout;
+  size_t bufsize, decode_bufsize;
+  void *buf, *decode_buf;
+
+  snd_pcm_sframes_t avail, delay;
+  struct timespec timestamp;
+  unsigned short revents;
+  snd_pcm_state_t state;
+  ssize_t readlen=0;
+  struct rtp_header *header;
+  struct rtp_payload *payload;
+
+  size_t written;
+  size_t decoded;
+
+  snd_pcm_sframes_t sent_frames = 0;
+  int sent = 0;
+
+
+  /// ********************************************
+  ///
   // run
   while (1)
   {
+
     switch (data->command)
     {
+    case IO_CMD_INIT_PCM:
+      debug_print ("\nINIT PCM !!!\n");
+      break;
+
     case IO_CMD_IDLE:
-      debug_print ("\nWAIT !!!\n");
-      &data->streamStatus == 1;
+      debug_print ("\nIO_CMD_IDLE !!!\n");
       pthread_cond_wait (&data->cond, &data->mutex);
       break;
 
     case IO_CMD_RUNNING:
-      setup_sbc(&data->sbc, &data->cap);
+
+      //setup_sbc(&data->sbc, &data->cap);
+
+      if(data->streamStatus == 0 || data->streamStatus == 2)
+      {
+        debug_print ("\n *** INIT PCM !!!\n");
+
+        switch (data->cap.frequency)
+        {
+        case BT_SBC_SAMPLING_FREQ_16000:
+          data->sbc.frequency = SBC_FREQ_16000;
+          break;
+        case BT_SBC_SAMPLING_FREQ_32000:
+          data->sbc.frequency = SBC_FREQ_32000;
+          break;
+        case BT_SBC_SAMPLING_FREQ_44100:
+          data->sbc.frequency = SBC_FREQ_44100;
+          break;
+        case BT_SBC_SAMPLING_FREQ_48000:
+          data->sbc.frequency = SBC_FREQ_48000;
+          break;
+        default:
+          fprintf (stderr, "No supported frequency");
+        }
+
+        switch (data->cap.channel_mode)
+        {
+        case BT_A2DP_CHANNEL_MODE_MONO:
+          data->sbc.mode = SBC_MODE_MONO;
+          break;
+        case BT_A2DP_CHANNEL_MODE_DUAL_CHANNEL:
+          data->sbc.mode = SBC_MODE_DUAL_CHANNEL;
+          break;
+        case BT_A2DP_CHANNEL_MODE_STEREO:
+          data->sbc.mode = SBC_MODE_STEREO;
+          break;
+        case BT_A2DP_CHANNEL_MODE_JOINT_STEREO:
+          data->sbc.mode = SBC_MODE_JOINT_STEREO;
+          break;
+        default:
+          fprintf (stderr, "No supported channel_mode");
+        }
+
+        switch (data->cap.allocation_method)
+        {
+        case BT_A2DP_ALLOCATION_SNR:
+          data->sbc.allocation = SBC_AM_SNR;
+          break;
+        case BT_A2DP_ALLOCATION_LOUDNESS:
+          data->sbc.allocation = SBC_AM_LOUDNESS;
+          break;
+        default:
+          fprintf (stderr, "No supported allocation");
+        }
+
+        switch (data->cap.subbands)
+        {
+        case BT_A2DP_SUBBANDS_4:
+          data->sbc.subbands = SBC_SB_4;
+          break;
+        case BT_A2DP_SUBBANDS_8:
+          data->sbc.subbands = SBC_SB_8;
+          break;
+        default:
+          fprintf (stderr, "No supported subbands");
+        }
+
+        switch (data->cap.block_length)
+        {
+        case BT_A2DP_BLOCK_LENGTH_4:
+          data->sbc.blocks = SBC_BLK_4;
+          break;
+        case BT_A2DP_BLOCK_LENGTH_8:
+          data->sbc.blocks = SBC_BLK_8;
+          break;
+        case BT_A2DP_BLOCK_LENGTH_12:
+          data->sbc.blocks = SBC_BLK_12;
+          break;
+        case BT_A2DP_BLOCK_LENGTH_16:
+          data->sbc.blocks = SBC_BLK_16;
+          break;
+        default:
+          fprintf (stderr, "No supported block length");
+        }
+
+        data->sbc.bitpool = data->cap.max_bitpool;
+
+        snd_pcm_hw_params_alloca(&hwparams);
+        snd_pcm_sw_params_alloca(&swparams);
+        snd_pcm_status_alloca(&status);
+
+        if(data->devId == 1)
+        {
+          r = snd_pcm_open(&data->pcm, PCM_DEVICE, SND_PCM_STREAM_PLAYBACK, 0);
+          assert(r == 0);
+        }
+        else
+        {
+          r = snd_pcm_open(&data->pcm, PCM_DEVICE_SECOND, SND_PCM_STREAM_PLAYBACK, 0);
+          assert(r == 0);
+        }
+
+        r = snd_pcm_hw_params_any(data->pcm, hwparams);
+        assert(r == 0);
+        r = snd_pcm_hw_params_set_rate_resample(data->pcm, hwparams, 1);
+        assert(r == 0);
+        r = snd_pcm_hw_params_set_access(data->pcm, hwparams, SND_PCM_ACCESS_RW_INTERLEAVED);
+        assert(r == 0);
+        r = snd_pcm_hw_params_set_format(data->pcm, hwparams, SND_PCM_FORMAT_S16_LE);
+        assert(r == 0);
+        r = snd_pcm_hw_params_set_rate_near(data->pcm, hwparams, &rate, NULL);
+        assert(r == 0);
+        r = snd_pcm_hw_params_set_channels(data->pcm, hwparams, 2);
+        assert(r == 0);
+        r = snd_pcm_hw_params_set_periods_integer(data->pcm, hwparams);
+        assert(r == 0);
+        r = snd_pcm_hw_params_set_periods_near(data->pcm, hwparams, &periods, &dir);
+        assert(r == 0);
+        r = snd_pcm_hw_params_set_buffer_size_near(data->pcm, hwparams, &buffer_size);
+        assert(r == 0);
+        r = snd_pcm_hw_params(data->pcm, hwparams);
+        assert(r == 0);
+        r = snd_pcm_hw_params_current(data->pcm, hwparams);
+        assert(r == 0);
+        r = snd_pcm_sw_params_current(data->pcm, swparams);
+        assert(r == 0);
+        r = snd_pcm_sw_params_set_avail_min(data->pcm, swparams, 1);
+        assert(r == 0);
+        r = snd_pcm_sw_params_set_period_event(data->pcm, swparams, 0);
+        assert(r == 0);
+        r = snd_pcm_hw_params_get_buffer_size(hwparams, &buffer_size);
+        assert(r == 0);
+        r = snd_pcm_sw_params_set_start_threshold(data->pcm, swparams, buffer_size);
+        assert(r == 0);
+        r = snd_pcm_sw_params_get_boundary(swparams, &boundary);
+        assert(r == 0);
+        r = snd_pcm_sw_params_set_stop_threshold(data->pcm, swparams, boundary);
+        assert(r == 0);
+        r = snd_pcm_sw_params_set_tstamp_mode(data->pcm, swparams, SND_PCM_TSTAMP_ENABLE);
+        assert(r == 0);
+        r = snd_pcm_sw_params(data->pcm, swparams);
+        assert(r == 0);
+        r = snd_pcm_prepare(data->pcm);
+        assert(r == 0);
+        r = snd_pcm_sw_params_current(data->pcm, swparams);
+        assert(r == 0);
+        n_pollfd = snd_pcm_poll_descriptors_count(data->pcm);
+        assert(n_pollfd > 0);
+        pollfds = malloc(sizeof(struct pollfd) * n_pollfd);
+        assert(pollfds);
+        r = snd_pcm_poll_descriptors(data->pcm, pollfds, n_pollfd);
+        assert(r == n_pollfd);
+
+        printf("Starting. Buffer size is %u frames\n", (unsigned int) buffer_size);
+        data->command = IO_CMD_RUNNING;
+        data->streamStatus = 1;
+      }
+
+      /// ************************************************************************************
+
+            struct pollfd pollin = { data->fd, POLLIN, 0 };
+            timeout = poll(&pollin, 1, 1000); //delay 1s to allow others to update our state
+            debug_print("......................................(%d)\n",timeout);
+            if (timeout == 0)
+            {
+              continue;
+            }
+            else if (timeout < 0)
+            {
+              data->command = IO_CMD_IDLE;
+              break;
+            }
+
+            while(POLLIN == (pollin.revents & POLLIN) && timeout > 0)
+            {
+              //debug_print(".......POLL in .....\n");
+
+
+              typeof(data->read_mtu) _a = (data->read_mtu);                 \
+              typeof(data->write_mtu) _b = (data->write_mtu);                 \
+
+              size_t min_buffer_size = _a > _b ? _a : _b;
+
+              bufsize = 2 * min_buffer_size;
+              buf = malloc(bufsize);
+
+              decode_bufsize = (bufsize / sbc_get_frame_length(&data->sbc) + 1 ) * sbc_get_codesize(&data->sbc);
+              decode_buf = malloc (decode_bufsize);
+
+              // read bluetooth
+              readlen = read(data->fd, buf, bufsize);
+              if (readlen == 0)
+              {
+                //data->command = IO_CMD_TERMINATE;
+                debug_print("============= TERMINATE 1 ===============================================\n");
+                debug_print("FINISH\n");
+                snd_pcm_drop(data->pcm);
+                snd_pcm_close(data->pcm);
+                free(buf);
+                free(pollfds);
+                free(decode_buf);
+                data->streamStatus = 2;
+                data->command = IO_CMD_TERMINATE;
+                break;
+              }
+              else if (readlen < 0)
+              {
+                debug_print("== TERMINATE 2 ==\n");
+                snd_pcm_drop(data->pcm);
+                snd_pcm_close(data->pcm);
+                free(buf);
+                free(pollfds);
+                free(decode_buf);
+                data->streamStatus = 2;
+                data->command = IO_CMD_IDLE;
+                debug_print("FINISH\n");
+                break;
+              }
+
+              header = buf;
+              payload = (struct rtp_payload*) ((uint8_t*) buf + sizeof(*header));
+
+              void *p = buf + sizeof(*header) + sizeof(*payload);
+              size_t to_decode = readlen - sizeof(*header) - sizeof(*payload);
+
+              void *d = decode_buf;
+              size_t to_write = decode_bufsize;
+
+              while (to_decode > 0)
+              {
+                decoded = sbc_decode(&data->sbc,
+                                     p, to_decode,
+                                     d, to_write,
+                                     &written);
+
+                if (decoded <= 0)
+                {
+                  debug_print("SBC decoding error %zd\n", decoded);
+                  break;
+                }
+
+                (size_t) decoded <= to_decode;
+                (size_t) decoded == sbc_get_frame_length(&data->sbc);
+
+                (size_t) written == sbc_get_codesize(&data->sbc);
+
+                p = (uint8_t*) p + decoded;
+                to_decode -= decoded;
+                d = (uint8_t*) d + written;
+                to_write -= written;
+              }
+
+              sent_frames = 0;
+              sent = 0;
+
+              // write stdout
+              do
+              {
+                sent_frames = snd_pcm_writei(data->pcm,
+                                             (char *) decode_buf + sent,
+                                             snd_pcm_bytes_to_frames(data->pcm, decode_bufsize - to_write - sent));
+                if(sent_frames < 0)
+                {
+                  //assert(sent_frames != -EAGAIN);
+                  if (sent_frames == -EPIPE)
+                    debug_print("%s: Buffer underrun! #######", "snd_pcm_writei");
+
+                  if (sent_frames == -ESTRPIPE)
+                    debug_print("%s: System suspended! #######", "snd_pcm_writei");
+
+                  if (snd_pcm_recover(data->pcm, sent_frames, 1) < 0)
+                  {
+                    debug_print("%s: RECOVER #######!", "snd_pcm_writei");
+                    snd_pcm_drop(data->pcm);
+                    snd_pcm_close(data->pcm);
+                    data->streamStatus = 2;
+                    data->command = IO_CMD_IDLE;
+                    break;
+                  }
+                }
+                sent += snd_pcm_frames_to_bytes(data->pcm, sent_frames);
+
+                //debug_print(">>> READ (%d) - WRITE (%d) - availPCM (%d) - THREAD (%d)\n", readlen, (decode_bufsize - to_write), avail, data->devId);
+              }while (sent < (decode_bufsize - to_write) && timeout > 0 && data->command == IO_CMD_RUNNING);
+           }
+
+      /// ************************************************************************************
       break;
 
     case IO_CMD_TERMINATE:
@@ -2208,7 +2543,7 @@ void *io_thread_run(void *ptr)
 end:
   // cleanup
   sbc_finish(&data->sbc);
-  //pthread_mutex_unlock (&data->mutex);
+  pthread_mutex_unlock (&data->mutex);
   return NULL;
 }
 
