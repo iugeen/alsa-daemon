@@ -125,6 +125,7 @@ typedef struct
   {
     IO_CMD_IDLE = 0,
     IO_CMD_RUNNING,
+    IO_CMD_RUN_HEADSET,
     IO_CMD_TERMINATE,
     IO_CMD_INIT_PCM
   } command;
@@ -169,6 +170,7 @@ void *stream_bt_input(void *ptr);
 void *pa_push(void *ptr);
 void *a2dp_push(void *ptr);
 void *stream_bt_output(void *ptr);
+//void *stream_bt_outputTEST(void *ptr);
 void io_thread_set_command (io_thread_tcb_s *data, int command);
 io_thread_tcb_s *create_io_thread();
 void destroy_io_thread(io_thread_tcb_s *p);
@@ -952,7 +954,7 @@ fail:
      * @param [in] io thread's data - to command I/O thread to stop.
      * @returns reply message (success or failure)
      *********************/
-DBusMessage* endpoint_clear_configuration (DBusMessage *msg, io_thread_tcb_s **io_threads_table) {
+DBusMessage* endpoint_clear_configuration (DBusMessage *msg, io_thread_tcb_s **io_threads_table, DBusConnection *conn) {
   DBusMessage *reply;
   DBusError err;
   DBusMessageIter iter;
@@ -975,6 +977,8 @@ DBusMessage* endpoint_clear_configuration (DBusMessage *msg, io_thread_tcb_s **i
     *io_threads_table = head;
     destroy_io_thread (io_data);
   }
+
+  //transport_release(conn, io_data->transport_path, io_data);
 
   reply = dbus_message_new_method_return(msg);
   return reply;
@@ -1289,7 +1293,6 @@ void audiosource_property_changed (DBusConnection *conn, DBusMessage *msg, int w
   io_data = head;
   do
   {
-    debug_print ("TEST dev_path(%s) io_data->dev_path (%s)\n", dev_path, io_data->dev_path);
     if (strcasecmp (dev_path, io_data->dev_path) == 0)
     {
       break;
@@ -1330,50 +1333,50 @@ void audiosource_property_changed (DBusConnection *conn, DBusMessage *msg, int w
     when_to_release = STATE_CONNECTED << 4 | STATE_DISCONNECTED;
   }
 
-  //  debug_print ("transition (%d) - when_to_acquire (%d)####\n", transition, when_to_acquire);
-
   io_data->connData = conn;
 
   //acquire or release transport depending on the transitions
   if (strcasecmp (statusString, "playing") == 0)
   {
-//    if(io_data->streamStatus == 1 || io_data->streamStatus == 2)
-//    {
-//      io_thread_set_command (io_data, IO_CMD_RUNNING);
-//    }
-//    else
-//    {
+    if(io_data->streamStatus == 1)
+    {
+      if(io_data->write == 0)
+      {
+        debug_print(">>>>>>PHONE>>>>\n");
+        io_thread_set_command (io_data, IO_CMD_RUNNING);
+      }
+    }
+    else
+    {
       if (transport_acquire(conn, io_data->transport_path, &io_data->fd, &io_data->read_mtu, &io_data->write_mtu))
       {
-        debug_print ("[DEBUG] - Audio streaming START - READ/WRITE \n");
-        debug_print ("fd: %d read mtu %d write mtu %d\n", io_data->fd, io_data->read_mtu, io_data->write_mtu);
-        usleep(100);
-        io_thread_set_command (io_data, IO_CMD_RUNNING);
+        debug_print ("[DEBUG]-Audio streaming START = fd: %d read mtu %d write mtu %d\n", io_data->fd, io_data->read_mtu, io_data->write_mtu);
         if(io_data->write == 0)
         {
           debug_print(">>>>>>PHONE>>>>\n");
-          //pthread_create(&io_data->t_audio_handle, NULL, pa_push, io_data);
-          //io_thread_set_command (io_data, IO_CMD_RUNNING);
+          io_thread_set_command (io_data, IO_CMD_RUNNING);
         }
         else if(io_data->write == 1)
         {
           debug_print(">>>>>>HEADSET>>>>\n");
-          //pthread_create(&io_data->t_audio_handle, NULL, stream_bt_output, io_data);
-          io_thread_set_command (io_data, IO_CMD_IDLE); // IO_CMD_IDLE IO_CMD_RUNNING
+          io_thread_set_command (io_data, IO_CMD_RUN_HEADSET); // IO_CMD_IDLE IO_CMD_RUNNING
         }
       }
       else
       {
         debug_print("[DEBUG] - ERROR at transport_acquire\n");
       }
-//    }
+    }
     statusString = "stopped";
     new_state = transition = -1;
   }
   else
   {
     debug_print ("\n[DEBUG] - Audio streaming STOP\n");
-    //transport_release (conn, io_data->transport_path, io_data);
+    if(io_data->streamStatus == 2)
+    {
+      transport_release (conn, io_data->transport_path, io_data);
+    }
     io_thread_set_command (io_data, IO_CMD_IDLE);
   }
   return;
@@ -1675,6 +1678,154 @@ void *stream_bt_output(void *ptr)
   data->streamStatus == 0;
   pthread_exit(0);
 }
+
+
+
+
+void stream_bt_outputTEST(io_thread_tcb_s *data) {
+  void *bufHEADSET, *encode_buf_HEADSET;
+  size_t bufsize_HEADSET, encode_bufsize_HEADSET;
+  struct pollfd pollout = { data->fd, POLLOUT, 0 };
+  int timeout_HEADSET;
+
+  debug_print ("write to bt\n");
+
+  // get buffers
+  encode_bufsize_HEADSET = data->write_mtu;
+  encode_buf_HEADSET = malloc (encode_bufsize_HEADSET);
+  bufsize_HEADSET = (encode_bufsize_HEADSET / sbc_get_frame_length (&data->sbc)) * // max frames allowed in a packet
+  sbc_get_codesize(&data->sbc); // ensure all of our source will fit in a single packet
+  bufHEADSET = malloc (bufsize_HEADSET);
+  debug_print ("encode_buf %d buf %d", encode_bufsize_HEADSET, bufsize_HEADSET);
+
+  /// =================================== READ FROM PCM CAPTURE ================================
+  char *capture_device = "A2DP_capture_0";
+  snd_pcm_t *capture_handle;
+  snd_pcm_uframes_t capture_psize;
+  unsigned int rate_HEADSET = 44100;
+  int err;
+
+   if((err = snd_pcm_open(&capture_handle, capture_device, SND_PCM_STREAM_CAPTURE, 0)) < 0)
+   {
+     debug_print ("cannot open audio device %s (%s)\n", capture_device, snd_strerror(err));
+     return 1;
+   }
+
+   if(!setup_handle(capture_handle, rate_HEADSET, &capture_psize))
+     return 1;
+   //cbuf = (short *)malloc(capture_psize * 2);
+   //printf("Recording 5-second audio clip to play.raw\n");
+   if((err = snd_pcm_prepare(capture_handle)) < 0)
+   {
+     debug_print ("cannot prepare audio interface for use (%s)\n", snd_strerror(err));
+     return 1;
+}
+
+   /// ===========================================================================================
+
+  // stream
+  while (data->command == IO_CMD_RUN_HEADSET)
+  {
+    ssize_t readlen;
+
+    /// READ FROM PCM CAPTURE ...................................................
+
+    int persize = bufsize_HEADSET;
+    snd_pcm_sframes_t received_frames_HEADSET = 0;
+    int received = 0;
+    do{
+        received_frames_HEADSET = snd_pcm_readi(capture_handle,
+                                     (char *)bufHEADSET + received,
+                                     snd_pcm_bytes_to_frames(capture_handle,persize - received));
+        if(received_frames_HEADSET < 0)
+        {
+            break;
+        }
+        //debug_print("READ = rec %d  size %d \n", received, persize);
+        received += snd_pcm_frames_to_bytes(capture_handle, received_frames_HEADSET);
+    } while (received < persize);
+
+    /// .........................................................................
+
+    struct rtp_header *header;
+    struct rtp_payload *payload;
+    size_t nbytes;
+
+    header = encode_buf_HEADSET;
+    payload = (struct rtp_payload*) ((uint8_t*) encode_buf_HEADSET + sizeof(*header));
+
+    void *p = bufHEADSET;
+    void *d = encode_buf_HEADSET + sizeof(*header) + sizeof(*payload);
+    size_t to_write = encode_bufsize_HEADSET - sizeof(*header) - sizeof(*payload);
+    size_t to_encode = readlen;
+    unsigned frame_count = 0;
+
+    while (to_encode >= sbc_get_codesize(&data->sbc))
+    {
+      //debug_print ("%zu ", to_encode);
+      ssize_t written;
+      ssize_t encoded;
+
+      //debug_print ("%p %d %d\n", d, to_write, sbc_get_frame_length (&data->sbc));
+      encoded = sbc_encode(&data->sbc,
+                           p, to_encode,
+                           d, to_write,
+                           &written);
+
+      if (encoded <= 0) {
+        //debug_print ("SBC encoding error %zd\n", encoded);
+        break; // make do with what have
+      }
+
+      p = (uint8_t*) p + encoded;
+      to_encode -= encoded;
+      d = (uint8_t*) d + written;
+      to_write -= written;
+
+      frame_count++;
+    }
+
+    // encapsulate it in a2dp RTP packets
+    memset(encode_buf_HEADSET, 0, sizeof(*header) + sizeof(*payload));
+    header->v = 2;
+    header->pt = 1;
+    header->sequence_number = htons(data->seq_num++);
+    header->timestamp = htonl(data->timestamp);
+    header->ssrc = htonl(1);
+    payload->frame_count = frame_count;
+
+    // next timestamp
+    data->timestamp += sbc_get_frame_duration(&data->sbc) * frame_count;
+
+    // how much to output
+    nbytes = (uint8_t*) d - (uint8_t*) encode_buf_HEADSET;
+
+    //debug_print ("nbytes: %zu\n", nbytes);
+    if (!nbytes) break; // don't write if there is nothing to write
+
+    // wait until bluetooth is ready
+    while (data->command == IO_CMD_RUN_HEADSET) {
+      //debug_print ("waiting for bluetooth\n");
+      timeout_HEADSET = poll (&pollout, 1, 1000); //delay 1s to allow others to update our state
+      if (timeout_HEADSET == 0) continue;
+      if (timeout_HEADSET < 0) fprintf (stderr, "bt_write/bluetooth: %d\n", errno);
+      break;
+    }
+
+    // write bluetooth
+    if (timeout_HEADSET > 0)
+    {
+      //debug_print ("flush bluetooth\n");
+      write (data->fd, encode_buf_HEADSET, nbytes);
+    }
+  }
+
+  // cleanup
+  snd_pcm_close(capture_handle);
+  free (bufHEADSET);
+  free (encode_buf_HEADSET);
+}
+
 
 static uint64_t timespec_us(const struct timespec *ts) {
   return
@@ -2191,8 +2342,6 @@ void *io_thread_run(void *ptr)
   pthread_mutex_lock (&data->mutex);
   sbc_init (&data->sbc, 0);
 
-
-  //io_thread_tcb_s *data = ptr;
   int r;
   snd_pcm_hw_params_t *hwparams;
   snd_pcm_sw_params_t *swparams;
@@ -2204,18 +2353,11 @@ void *io_thread_run(void *ptr)
   struct pollfd *pollfds;
   int n_pollfd;
 
-  //snd_pcm_t *data->pcm;
-
   /// ********************************************
 
   int timeout;
   size_t bufsize, decode_bufsize;
   void *buf, *decode_buf;
-
-  snd_pcm_sframes_t avail, delay;
-  struct timespec timestamp;
-  unsigned short revents;
-  snd_pcm_state_t state;
   ssize_t readlen=0;
   struct rtp_header *header;
   struct rtp_payload *payload;
@@ -2226,31 +2368,34 @@ void *io_thread_run(void *ptr)
   snd_pcm_sframes_t sent_frames = 0;
   int sent = 0;
 
-
   /// ********************************************
-  ///
+
   // run
   while (1)
   {
-
     switch (data->command)
     {
-    case IO_CMD_INIT_PCM:
-      debug_print ("\nINIT PCM !!!\n");
-      break;
-
     case IO_CMD_IDLE:
-      debug_print ("\nIO_CMD_IDLE !!!\n");
+      debug_print ("\n IO_CMD_IDLE !!!\n");
       pthread_cond_wait (&data->cond, &data->mutex);
       break;
 
     case IO_CMD_RUNNING:
 
       //setup_sbc(&data->sbc, &data->cap);
+      debug_print ("\n IO_CMD_RUNNING !!!\n");
 
       if(data->streamStatus == 0 || data->streamStatus == 2)
       {
-        debug_print ("\n *** INIT PCM !!!\n");
+
+        if(data->devId == 1)
+        {
+          debug_print ("\n *** INIT PCM : (%s)!!!\n", PCM_DEVICE);
+        }
+        else
+        {
+          debug_print ("\n *** INIT PCM : (%s)!!!\n", PCM_DEVICE_SECOND);
+        }
 
         switch (data->cap.frequency)
         {
@@ -2405,23 +2550,31 @@ void *io_thread_run(void *ptr)
 
       /// ************************************************************************************
 
-            struct pollfd pollin = { data->fd, POLLIN, 0 };
-            timeout = poll(&pollin, 1, 1000); //delay 1s to allow others to update our state
-            debug_print("......................................(%d)\n",timeout);
+      struct pollfd pollin = { data->fd, POLLIN, 0 };
+      while(true)
+      {
+            timeout = poll(&pollin, 1, 500); //delay 1s to allow others to update our state
             if (timeout == 0)
             {
-              continue;
+              debug_print("..continue.(%d)\n",timeout);
+              snd_pcm_drop(data->pcm);
+              snd_pcm_close(data->pcm);
+              free(buf);
+              free(pollfds);
+              free(decode_buf);
+              data->streamStatus = 2;
+              data->command = IO_CMD_IDLE;
+              debug_print("FINISH\n");
+              break;
             }
             else if (timeout < 0)
             {
+              debug_print("..poll...(%d)\n",timeout);
               data->command = IO_CMD_IDLE;
               break;
             }
 
-            while(POLLIN == (pollin.revents & POLLIN) && timeout > 0)
-            {
-              //debug_print(".......POLL in .....\n");
-
+            //debug_print(".......POLL in .....\n");
 
               typeof(data->read_mtu) _a = (data->read_mtu);                 \
               typeof(data->write_mtu) _b = (data->write_mtu);                 \
@@ -2434,23 +2587,30 @@ void *io_thread_run(void *ptr)
               decode_bufsize = (bufsize / sbc_get_frame_length(&data->sbc) + 1 ) * sbc_get_codesize(&data->sbc);
               decode_buf = malloc (decode_bufsize);
 
-              // read bluetooth
-              readlen = read(data->fd, buf, bufsize);
+              if((readlen = read(data->fd, buf, bufsize)) < 0)
+              {
+                  if (errno == EINTR)
+                      continue;
+              }
+
               if (readlen == 0)
               {
-                //data->command = IO_CMD_TERMINATE;
-                debug_print("============= TERMINATE 1 ===============================================\n");
+                debug_print("=== TERMINATE 1 ===\n");
                 debug_print("FINISH\n");
                 snd_pcm_drop(data->pcm);
                 snd_pcm_close(data->pcm);
                 free(buf);
                 free(pollfds);
                 free(decode_buf);
-                data->streamStatus = 2;
                 data->command = IO_CMD_TERMINATE;
                 break;
               }
-              else if (readlen < 0)
+              else if (readlen < 0 && errno == EINTR)
+              {
+                debug_print("== CONTINUE 2 ==\n");
+                continue;
+              }
+              else if (readlen < 0 && errno == EAGAIN)
               {
                 debug_print("== TERMINATE 2 ==\n");
                 snd_pcm_drop(data->pcm);
@@ -2499,7 +2659,6 @@ void *io_thread_run(void *ptr)
 
               sent_frames = 0;
               sent = 0;
-
               // write stdout
               do
               {
@@ -2530,8 +2689,150 @@ void *io_thread_run(void *ptr)
                 //debug_print(">>> READ (%d) - WRITE (%d) - availPCM (%d) - THREAD (%d)\n", readlen, (decode_bufsize - to_write), avail, data->devId);
               }while (sent < (decode_bufsize - to_write) && timeout > 0 && data->command == IO_CMD_RUNNING);
            }
-
       /// ************************************************************************************
+      break;
+
+    case IO_CMD_RUN_HEADSET:
+      debug_print ("\n IO_CMD_RUN_HEADSET !!!\n");
+      io_thread_tcb_s *data = ptr;
+      setup_sbc (&data->sbc, &data->cap);
+      //stream_bt_outputTEST( data);
+
+      void *bufHEADSET, *encode_buf_HEADSET;
+      size_t bufsize_HEADSET, encode_bufsize_HEADSET;
+      struct pollfd pollout = { data->fd, POLLOUT, 0 };
+      int timeout_HEADSET;
+
+      debug_print ("write to bt\n");
+
+      // get buffers
+      encode_bufsize_HEADSET = data->write_mtu;
+      encode_buf_HEADSET = malloc (encode_bufsize_HEADSET);
+      bufsize_HEADSET = (encode_bufsize_HEADSET / sbc_get_frame_length (&data->sbc)) * // max frames allowed in a packet
+      sbc_get_codesize(&data->sbc); // ensure all of our source will fit in a single packet
+      bufHEADSET = malloc (bufsize_HEADSET);
+      debug_print ("encode_buf %d buf %d", encode_bufsize_HEADSET, bufsize_HEADSET);
+
+      /// =================================== READ FROM PCM CAPTURE ================================
+      char *capture_device = "A2DP_capture_0";
+      snd_pcm_t *capture_handle;
+      snd_pcm_uframes_t capture_psize;
+      unsigned int rate_HEADSET = 44100;
+      int err;
+
+       if((err = snd_pcm_open(&capture_handle, capture_device, SND_PCM_STREAM_CAPTURE, 0)) < 0)
+       {
+         debug_print ("cannot open audio device %s (%s)\n", capture_device, snd_strerror(err));
+         return 1;
+       }
+
+       if(!setup_handle(capture_handle, rate_HEADSET, &capture_psize))
+         return 1;
+       //cbuf = (short *)malloc(capture_psize * 2);
+       //printf("Recording 5-second audio clip to play.raw\n");
+       if((err = snd_pcm_prepare(capture_handle)) < 0)
+       {
+         debug_print ("cannot prepare audio interface for use (%s)\n", snd_strerror(err));
+         return 1;
+       }
+
+       /// ===========================================================================================
+
+      // stream
+      while (data->command == IO_CMD_RUN_HEADSET)
+      {
+        ssize_t readlen;
+        /// READ FROM PCM CAPTURE ...................................................
+
+        int persize = bufsize_HEADSET;
+        snd_pcm_sframes_t received_frames_HEADSET = 0;
+        int received = 0;
+        do{
+            received_frames_HEADSET = snd_pcm_readi(capture_handle,
+                                         (char *)bufHEADSET + received,
+                                         snd_pcm_bytes_to_frames(capture_handle,persize - received));
+            if(received_frames_HEADSET < 0)
+            {
+                break;
+            }
+            //debug_print("READ = rec %d  size %d \n", received, persize);
+            received += snd_pcm_frames_to_bytes(capture_handle, received_frames_HEADSET);
+        } while (received < persize);
+
+        /// .........................................................................
+
+        struct rtp_header *header;
+        struct rtp_payload *payload;
+        size_t nbytes;
+
+        header = encode_buf_HEADSET;
+        payload = (struct rtp_payload*) ((uint8_t*) encode_buf_HEADSET + sizeof(*header));
+
+        void *p = bufHEADSET;
+        void *d = encode_buf_HEADSET + sizeof(*header) + sizeof(*payload);
+        size_t to_write = encode_bufsize_HEADSET - sizeof(*header) - sizeof(*payload);
+        size_t to_encode = readlen;
+        unsigned frame_count = 0;
+
+        while (to_encode >= sbc_get_codesize(&data->sbc))
+        {
+          //debug_print ("%zu ", to_encode);
+          ssize_t written;
+          ssize_t encoded;
+
+          //debug_print ("%p %d %d\n", d, to_write, sbc_get_frame_length (&data->sbc));
+          encoded = sbc_encode(&data->sbc,
+                               p, to_encode,
+                               d, to_write,
+                               &written);
+
+          if (encoded <= 0) {
+            //debug_print ("SBC encoding error %zd\n", encoded);
+            break; // make do with what have
+          }
+
+          p = (uint8_t*) p + encoded;
+          to_encode -= encoded;
+          d = (uint8_t*) d + written;
+          to_write -= written;
+
+          frame_count++;
+        }
+
+        // encapsulate it in a2dp RTP packets
+        memset(encode_buf_HEADSET, 0, sizeof(*header) + sizeof(*payload));
+        header->v = 2;
+        header->pt = 1;
+        header->sequence_number = htons(data->seq_num++);
+        header->timestamp = htonl(data->timestamp);
+        header->ssrc = htonl(1);
+        payload->frame_count = frame_count;
+
+        // next timestamp
+        data->timestamp += sbc_get_frame_duration(&data->sbc) * frame_count;
+
+        // how much to output
+        nbytes = (uint8_t*) d - (uint8_t*) encode_buf_HEADSET;
+
+        //debug_print ("nbytes: %zu\n", nbytes);
+        if (!nbytes) break; // don't write if there is nothing to write
+
+        // wait until bluetooth is ready
+        while (data->command == IO_CMD_RUN_HEADSET) {
+          //debug_print ("waiting for bluetooth\n");
+          timeout_HEADSET = poll (&pollout, 1, 1000); //delay 1s to allow others to update our state
+          if (timeout_HEADSET == 0) continue;
+          if (timeout_HEADSET < 0) fprintf (stderr, "bt_write/bluetooth: %d\n", errno);
+          break;
+        }
+
+        // write bluetooth
+        if (timeout_HEADSET > 0)
+        {
+          //debug_print ("flush bluetooth\n");
+          write (data->fd, encode_buf_HEADSET, nbytes);
+        }
+      }
       break;
 
     case IO_CMD_TERMINATE:
@@ -2642,8 +2943,8 @@ int main(int argc, char** argv)
   else if (run_source)
   {
     run_source =  media_register_endpoint(system_bus, bt_object, A2DP_SOURCE_ENDPOINT, A2DP_SOURCE_UUID); // alsa --> bt
-    run_sink   =  media_register_endpoint(system_bus, bt_object, A2DP_SINK_ENDPOINT, A2DP_SINK_UUID); // bt --> alsa
-    run_sink   =  media_register_endpoint(system_bus, bt_object, A2DP_SINK_ENDPOINT_SECOND, A2DP_SINK_UUID); // bt --> alsa
+    //run_sink   =  media_register_endpoint(system_bus, bt_object, A2DP_SINK_ENDPOINT, A2DP_SINK_UUID); // bt --> alsa
+    //run_sink   =  media_register_endpoint(system_bus, bt_object, A2DP_SINK_ENDPOINT_SECOND, A2DP_SINK_UUID); // bt --> alsa
   }
   if (!run_source && !run_sink && !run_hfp) return 1;
 
@@ -2673,7 +2974,6 @@ int main(int argc, char** argv)
 
       if(dbus_message_is_signal(msg, "org.freedesktop.DBus.Properties", "PropertiesChanged")) // bt --> alsa
       {
-        //debug_print ("trigger : org.freedesktop.DBus.Properties\n");
         audiosource_property_changed (system_bus, msg, deviceType, &io_threads_table);
       }
       else if (dbus_message_is_method_call (msg, "org.bluez.MediaEndpoint1", "SetConfiguration"))
@@ -2686,7 +2986,7 @@ int main(int argc, char** argv)
       }
       else if(dbus_message_is_method_call (msg, "org.bluez.MediaEndpoint1", "ClearConfiguration"))
       {
-        reply = endpoint_clear_configuration (msg, &io_threads_table);
+        reply = endpoint_clear_configuration (msg, &io_threads_table, system_bus);
       }
       else if (dbus_message_is_method_call (msg, "org.bluez.MediaEndpoint1", "Release"))
       { reply = endpoint_release (msg); quit=1; }
