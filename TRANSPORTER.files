@@ -21,3 +21,8 @@ a2dp-alsa/rtp.h
 a2dp-alsa/time-smoother.c
 a2dp-alsa/time-smoother.h
 a2dp-alsa/uthash.h
+a2dp-alsa/parser.c
+a2dp-alsa/parser.h
+a2dp-alsa/Makefile
+a2dp-alsa/device.h
+a2dp-alsa/device.c
