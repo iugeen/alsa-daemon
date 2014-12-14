@@ -16,13 +16,58 @@
 #include "device.h"
 
 #define pa_streq(a,b) (!strcmp((a),(b)))
-#define PCM_DEVICE        "A2DP_playback_0"
+#define PCM_DEVICE        "plughw:1,0"
 #define PCM_DEVICE_SECOND "A2DP_playback_1"
 #define true 1
 #define false 0
 #define debug_print(...) (fprintf (stderr, __VA_ARGS__))
 
-void run_sink_A2DP(io_thread_tcb_s *data)
+void parseConfigFile(audio *audioCards)
+{
+   char *ch = NULL;
+   char *line = NULL;
+   size_t len = 0;
+   ssize_t read;
+   int sinkNumber = 0,  sourceNumber = 0;
+
+    debug_print ("read configuration file .........\n");
+    FILE* file = fopen("/var/pcm.conf", "r");
+    if ( 0 != file )
+    {
+        while ((read = getline(&line, &len, file)) != -1)
+        {
+            size_t ln = strlen(line) - 1;
+            if (line[ln] == '\n')
+                line[ln] = '\0';
+
+            ch = strtok(line, "=");
+            if(strcmp(ch, "sink") == 0)
+            {
+                ch = strtok(NULL, "=");
+                strcpy(audioCards->sinks[sinkNumber].name, ch);
+                audioCards->numOfSinks = sinkNumber;
+                audioCards->busy = 0;
+                sinkNumber++;
+            }
+            else if(strcmp(ch, "source") == 0)
+            {
+                ch = strtok(NULL, "=");
+                strcpy(audioCards->sources[sourceNumber].name, ch);
+                audioCards->numOfSinks = sourceNumber;
+                audioCards->busy = 0;
+                sourceNumber++;
+            }
+        }
+        fclose(file);
+    }
+    else
+    {
+        debug_print("please create config file (/var/pcm.conf)\n");
+    }
+
+}
+
+void run_sink_A2DP(io_thread_tcb_s *data, audio *cardName)
 {
   int r;
   snd_pcm_hw_params_t *hwparams;
@@ -32,11 +77,10 @@ void run_sink_A2DP(io_thread_tcb_s *data)
   unsigned periods = 2;
   snd_pcm_uframes_t boundary, buffer_size = 44100 / 10; /* 100s - 44100/10 */
   int dir = 1;
-  struct pollfd *pollfds;
-  int n_pollfd;
+//  struct pollfd *pollfds;
+//  int n_pollfd;
   int timeout;
   size_t bufsize, decode_bufsize;
-  void *buf, *decode_buf;
   size_t written;
   size_t decoded;
   snd_pcm_sframes_t sent_frames = 0;
@@ -45,14 +89,8 @@ void run_sink_A2DP(io_thread_tcb_s *data)
 
   if(data->streamStatus == 0 || data->streamStatus == 2)
   {
-    if(data->devId == 1)
-    {
-      debug_print ("\n INIT PCM : (%s)!!!\n", PCM_DEVICE);
-    }
-    else
-    {
-      debug_print ("\n INIT PCM : (%s)!!!\n", PCM_DEVICE_SECOND);
-    }
+
+    debug_print ("\n INIT PCM : (%s)!!!\n", cardName->sinks[data->devId-1].name);
 
     switch (data->cap.frequency)
     {
@@ -138,16 +176,8 @@ void run_sink_A2DP(io_thread_tcb_s *data)
     snd_pcm_sw_params_alloca(&swparams);
     snd_pcm_status_alloca(&status);
 
-    if(data->devId == 1)
-    {
-      r = snd_pcm_open(&data->pcm, PCM_DEVICE, SND_PCM_STREAM_PLAYBACK, 0);
-      assert(r == 0);
-    }
-    else
-    {
-      r = snd_pcm_open(&data->pcm, PCM_DEVICE_SECOND, SND_PCM_STREAM_PLAYBACK, 0);
-      assert(r == 0);
-    }
+    r = snd_pcm_open(&data->pcm, cardName->sinks[data->devId-1].name, SND_PCM_STREAM_PLAYBACK, 0);
+    assert(r == 0);
 
     r = snd_pcm_hw_params_any(data->pcm, hwparams);
     assert(r == 0);
@@ -193,27 +223,29 @@ void run_sink_A2DP(io_thread_tcb_s *data)
     assert(r == 0);
     r = snd_pcm_sw_params_current(data->pcm, swparams);
     assert(r == 0);
-    n_pollfd = snd_pcm_poll_descriptors_count(data->pcm);
-    assert(n_pollfd > 0);
-    pollfds = malloc(sizeof(struct pollfd) * n_pollfd);
-    assert(pollfds);
-    r = snd_pcm_poll_descriptors(data->pcm, pollfds, n_pollfd);
-    assert(r == n_pollfd);
+//    n_pollfd = snd_pcm_poll_descriptors_count(data->pcm);
+//    assert(n_pollfd > 0);
+//    pollfds = malloc(sizeof(struct pollfd) * n_pollfd);
+//    assert(pollfds);
+//    r = snd_pcm_poll_descriptors(data->pcm, pollfds, n_pollfd);
+//    assert(r == n_pollfd);
 
     printf("Starting. Buffer size is %u frames\n", (unsigned int) buffer_size);
     data->command = IO_CMD_RUNNING;
     data->streamStatus = 1;
   }
 
+  struct rtp_payload *payload;
+  const void *p;
+  void *d;
+  ssize_t readlen=0;
+  size_t to_decode;
+  size_t to_write;
+  void *buf, *decode_buf;
+  struct rtp_header *header;
+
   while(1)
   {
-    struct rtp_header *header;
-    struct rtp_payload *payload;
-    const void *p;
-    void *d;
-    ssize_t readlen=0;
-    size_t to_decode;
-    size_t to_write;
 
     timeout = poll(&pollin, 1, 500); //delay 1s to allow others to update our state
     if (timeout == 0)
@@ -325,22 +357,25 @@ void run_sink_A2DP(io_thread_tcb_s *data)
       sent += snd_pcm_frames_to_bytes(data->pcm, sent_frames);
       //debug_print(">>> READ (%d) - WRITE (%d) - THREAD (%d)\n", readlen, (decode_bufsize - to_write), data->devId);
     }while (sent < (decode_bufsize - to_write) && timeout > 0 && data->command == IO_CMD_RUNNING);
+
+    free(buf);
   }
 
 cleanup:
-  //snd_pcm_hw_params_free(hwparams);
-  //snd_pcm_sw_params_free(swparams);
   snd_pcm_drop(data->pcm);
   snd_pcm_close(data->pcm);
-  free(buf);
-  free(pollfds);
   free(decode_buf);
-  debug_print("FINISH\n");
+  debug_print("FINISH audio stream ...\n");
 }
+
+
+
+
+
 
 void run_source_A2DP(io_thread_tcb_s *data)
 {
-  char *capture_device = "A2DP_capture_0";
+  char *capture_device = "btheadset";
   //snd_pcm_t *data->pcm;
   snd_pcm_uframes_t capture_psize;
   unsigned int rate_HEADSET = 44100;

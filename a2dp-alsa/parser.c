@@ -14,83 +14,48 @@
 
 #define debug_print(...) (fprintf (stderr, __VA_ARGS__))
 
-char sinks[10]= {""};
-char sources[10] = {""};
 
-void parseConfigFile()
-{
-  debug_print ("configuration file ....\n");
-  FILE* file = fopen("/var/pcm.conf", "r");
-  if ( 0 != file )
-  {
-    char readinline[4096];
-    char* workingstr;
-    int sinkNumber = 0;
-    int sourceNumber = 0;
-    while (0 == feof(file))
-    {
-      if (0 != fgets(readinline, sizeof(readinline), file))
-      {
-        workingstr = readinline;
-        if ((0 != sizeof(workingstr)) && ('#' != workingstr[0])) // if not a comment
-        {
-          size_t ln = strlen(workingstr) - 1;
-          if (workingstr[ln] == '\n')
-              workingstr[ln] = '\0';
+//void parseConfigFile(audio *audioCards)
+//{
+//   char *ch = NULL;
+//   char *line = NULL;
+//   size_t len = 0;
+//   ssize_t read;
+//   int sinkNumber = 0,  sourceNumber = 0;
 
-          char *ch;
-          int addAlsaCard = 0;
-          ch = strtok(workingstr, "=");
-          while (ch != NULL)
-          {
-            if(strcmp(ch, "sink") == 0)
-            {
-              addAlsaCard = 1;
-            }
-            else if(strcmp(ch, "source") == 0)
-            {
-              addAlsaCard = 2;
-            }
-            else if(addAlsaCard == 1)
-            {
-              debug_print ("SINK : %s\n", ch);
-              sinks[sinkNumber] = ch;
-              addAlsaCard = 0;
-              sinkNumber++;
-            }
-            else if(addAlsaCard == 2)
-            {
-              debug_print ("SOURCE : %s\n", ch);
-              sources[sourceNumber] = ch;
-              addAlsaCard = 0;
-              sourceNumber++;
-            }
+//    debug_print ("read configuration file .........\n");
+//    FILE* file = fopen("/var/pcm.conf", "r");
+//    if ( 0 != file )
+//    {
+//        while ((read = getline(&line, &len, file)) != -1)
+//        {
+//            size_t ln = strlen(line) - 1;
+//            if (line[ln] == '\n')
+//                line[ln] = '\0';
 
-            ch = strtok(NULL, " ,");
-          }
-        }
-      }
-    }
-    fclose(file);
-  }
-  else
-  {
-    debug_print ("no file\n");
-  }
-}
+//            ch = strtok(line, "=");
+//            if(strcmp(ch, "sink") == 0)
+//            {
+//                ch = strtok(NULL, "=");
+//                strcpy(audioCards->sinks[sinkNumber].name, ch);
+//                audioCards->numOfSinks = sinkNumber;
+//                audioCards->busy = 0;
+//                sinkNumber++;
+//            }
+//            else if(strcmp(ch, "source") == 0)
+//            {
+//                ch = strtok(NULL, "=");
+//                strcpy(audioCards->sources[sourceNumber].name, ch);
+//                audioCards->numOfSinks = sourceNumber;
+//                audioCards->busy = 0;
+//                sourceNumber++;
+//            }
+//        }
+//        fclose(file);
+//    }
+//    else
+//    {
+//        debug_print("please create config file (/var/pcm.conf)\n");
+//    }
 
-char* getSinks()
-{
-  return sinks;
-}
-
-char* getSources()
-{
-  return sources;
-}
-
-
-
-
-
-
+//}
