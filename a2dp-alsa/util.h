@@ -8,6 +8,7 @@
 typedef struct cards
 {
     char name[200]; // 20 character array
+    int  busy;
 }cards;
 
 typedef struct audio
@@ -16,7 +17,6 @@ typedef struct audio
     cards sources[10];
     int numOfSinks;
     int numOfSources;
-    int busy;
 }audio;
 
 
@@ -54,6 +54,7 @@ typedef struct
 
   int devId;
   int streamStatus;
+  int cardNumberUsed;
   snd_pcm_t *pcm;
 
   char *devType;

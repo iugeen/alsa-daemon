@@ -1841,7 +1841,7 @@ void *io_thread_run(void *ptr)
 
         case IO_CMD_RUN_HEADSET:
             debug_print ("\n[STATUS] IO_CMD_RUN_HEADSET for : %s\n", data->transport_path);
-            run_source_A2DP(data);
+            run_source_A2DP(data, audioCards);
             break;
 
         case IO_CMD_TERMINATE:
@@ -1869,7 +1869,7 @@ int main(int argc, char** argv)
     char *bt_object;	// bluetooth device objectpath
     io_thread_tcb_s *io_threads_table = NULL; // hashtable of io_threads
     int msg_waiting_time = -1; //default is wait forever
-    audioCards = malloc(sizeof(audio));
+    audioCards = malloc(10*sizeof(audio));
     char *newEndpoint = malloc(50);
     int i = 0;
 
@@ -1884,10 +1884,11 @@ int main(int argc, char** argv)
         debug_print ("Adaptor path : (%s)\n", bt_object);
 
         parseConfigFile(audioCards);
+
         for(i; i<= audioCards->numOfSinks; i++)
         {
             sprintf(newEndpoint, "/MediaEndpoint/A2DPSink%d", i);
-            printf("New endpoint : %s\n", newEndpoint);
+            debug_print ("New endpoint : %s\n", newEndpoint);
             media_register_endpoint(system_bus, bt_object, newEndpoint, A2DP_SINK_UUID);
         }
 
@@ -1896,7 +1897,7 @@ int main(int argc, char** argv)
         for(i; i<= audioCards->numOfSources; i++)
         {
             sprintf(newEndpoint, "/MediaEndpoint/A2DPSource%d", i);
-            printf("New endpoint : %s\n", newEndpoint);
+            debug_print ("New endpoint : %s\n", newEndpoint);
             media_register_endpoint(system_bus, bt_object, newEndpoint, A2DP_SOURCE_UUID);
         }
 

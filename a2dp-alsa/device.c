@@ -26,12 +26,13 @@ void parseConfigFile(audio *audioCards)
 {
    char *ch = NULL;
    char *line = NULL;
+   char *confFile = "/var/pcm.conf";
    size_t len = 0;
    ssize_t read;
    int sinkNumber = 0,  sourceNumber = 0;
 
-    debug_print ("read configuration file .........\n");
-    FILE* file = fopen("/var/pcm.conf", "r");
+    debug_print ("read configuration file (%s) .........\n", confFile);
+    FILE* file = fopen(confFile, "r");
     if ( 0 != file )
     {
         while ((read = getline(&line, &len, file)) != -1)
@@ -46,15 +47,15 @@ void parseConfigFile(audio *audioCards)
                 ch = strtok(NULL, "=");
                 strcpy(audioCards->sinks[sinkNumber].name, ch);
                 audioCards->numOfSinks = sinkNumber;
-                audioCards->busy = 0;
+                audioCards->sinks[sinkNumber].busy = 0;
                 sinkNumber++;
             }
             else if(strcmp(ch, "source") == 0)
             {
                 ch = strtok(NULL, "=");
                 strcpy(audioCards->sources[sourceNumber].name, ch);
-                audioCards->numOfSinks = sourceNumber;
-                audioCards->busy = 0;
+                audioCards->numOfSources = sourceNumber;
+                audioCards->sources[sourceNumber].busy = 0;
                 sourceNumber++;
             }
         }
@@ -64,7 +65,6 @@ void parseConfigFile(audio *audioCards)
     {
         debug_print("please create config file (/var/pcm.conf)\n");
     }
-
 }
 
 void run_sink_A2DP(io_thread_tcb_s *data, audio *cardName)
@@ -86,12 +86,11 @@ void run_sink_A2DP(io_thread_tcb_s *data, audio *cardName)
   snd_pcm_sframes_t sent_frames = 0;
   int sent = 0;
   struct pollfd pollin = { data->fd, POLLIN, 0 };
+  char *cardname; // = malloc(sizeof(char));
+  int i = 0;
 
   if(data->streamStatus == 0 || data->streamStatus == 2)
   {
-
-    debug_print ("\n INIT PCM : (%s)!!!\n", cardName->sinks[data->devId-1].name);
-
     switch (data->cap.frequency)
     {
     case BT_SBC_SAMPLING_FREQ_16000:
@@ -176,7 +175,22 @@ void run_sink_A2DP(io_thread_tcb_s *data, audio *cardName)
     snd_pcm_sw_params_alloca(&swparams);
     snd_pcm_status_alloca(&status);
 
-    r = snd_pcm_open(&data->pcm, cardName->sinks[data->devId-1].name, SND_PCM_STREAM_PLAYBACK, 0);
+    i = 0;
+
+    for(i; i<= audioCards->numOfSinks; i++)
+    {
+        if(audioCards->sinks[i].busy == 0)
+        {
+          audioCards->sinks[i].busy = 1;
+          cardname = cardName->sinks[i].name;
+          data->cardNumberUsed = i;
+          break;
+        }
+    }
+
+    debug_print ("\n INIT PCM : (%s)!!!\n", cardName->sinks[i].name);
+
+    r = snd_pcm_open(&data->pcm, cardName->sinks[data->cardNumberUsed].name, SND_PCM_STREAM_PLAYBACK, 0);
     assert(r == 0);
 
     r = snd_pcm_hw_params_any(data->pcm, hwparams);
@@ -365,6 +379,9 @@ cleanup:
   snd_pcm_drop(data->pcm);
   snd_pcm_close(data->pcm);
   free(decode_buf);
+
+  audioCards->sinks[data->cardNumberUsed].busy = 0;
+
   debug_print("FINISH audio stream ...\n");
 }
 
@@ -373,7 +390,7 @@ cleanup:
 
 
 
-void run_source_A2DP(io_thread_tcb_s *data)
+void run_source_A2DP(io_thread_tcb_s *data, audio *cardName)
 {
   char *capture_device = "btheadset";
   //snd_pcm_t *data->pcm;
@@ -394,6 +411,7 @@ void run_source_A2DP(io_thread_tcb_s *data)
   unsigned rate = 44100;
   unsigned periods = 2;
   snd_pcm_uframes_t boundary, buffer_size = 44100 / 10; /* 100s - 44100/10 */
+  int i = 0;
 
   if(data->streamStatus == 0 || data->streamStatus == 2)
   {
@@ -485,9 +503,22 @@ void run_source_A2DP(io_thread_tcb_s *data)
     snd_pcm_status_alloca(&status);
 
     debug_print ("write to bt (to fd - %d)\n", data->fd);
-    debug_print ("encode_buf %d buf %d", encode_bufsize_HEADSET, bufsize_HEADSET);
 
-    r = snd_pcm_open(&data->pcm, capture_device, SND_PCM_STREAM_CAPTURE, 0);
+    i = 0;
+
+    for(i; i<= audioCards->numOfSources; i++)
+    {
+        if(audioCards->sources[i].busy == 0)
+        {
+          audioCards->sources[i].busy = 1;
+          data->cardNumberUsed = i;
+          break;
+        }
+    }
+
+    debug_print ("\n INIT PCM : (%s)!!!\n", cardName->sources[data->cardNumberUsed].name);
+
+    r = snd_pcm_open(&data->pcm, cardName->sources[data->cardNumberUsed].name, SND_PCM_STREAM_CAPTURE, 0);
     assert(r == 0);
     r = snd_pcm_hw_params_any(data->pcm, hwparams);
     assert(r == 0);
@@ -545,6 +576,8 @@ void run_source_A2DP(io_thread_tcb_s *data)
     bufsize_HEADSET = (encode_bufsize_HEADSET / sbc_get_frame_length(&data->sbc)) * // max frames allowed in a packet
         sbc_get_codesize(&data->sbc); // ensure all of our source will fit in a single packet
     bufHEADSET = malloc (bufsize_HEADSET);
+
+    debug_print ("encode_buf %d buf %d", encode_bufsize_HEADSET, bufsize_HEADSET);
 
     ssize_t readlen;
     int persize = bufsize_HEADSET;
@@ -654,4 +687,5 @@ void run_source_A2DP(io_thread_tcb_s *data)
   snd_pcm_close(data->pcm);
   free(bufHEADSET);
   free(encode_buf_HEADSET);
+  audioCards->sources[data->cardNumberUsed].busy = 0;
 }
