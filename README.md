@@ -1,22 +1,26 @@
 alsa-daemon
 ===========
 
-This daemon will handle the a2dp and hfp audio streaming connections and can replace pulseaudio functionality in the system.
+This daemon will handle the a2dp audio streaming connections and can replace pulseaudio functionality in the system.
 
 Update :
-- sbc 1.2 library is included
+- sbc 1.3 library is included
 
-Run steps:
-
+Mandatory steps:
 - stop pulseaudio daemon
+- create configuration file (pcm.conf)
+
+e.g: sink=A2dpSink0
+     source=A2dpSource0 
+
+Run daemon:
+- ./a2dp-alsa
 
 SINK :
-- ./a2dp-alsa --sink
+- connect device
+- connect sink [4 | 16 | 17] with source 1 
 
 SOURCE :
-
-  connect source 1 with sink 8 : connect 1 8 
-
-- ./a2dp-alsa --source
-
+- connect headset
+- connect source 1 with sink [8 | 9 |10] 
 - aplay -D MEDIA_playback_0 onclassical_demo_roccato_anonymous-roccato_riflessi_small-version.wav
