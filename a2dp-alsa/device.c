@@ -249,17 +249,17 @@ void run_sink_A2DP(io_thread_tcb_s *data, audio *cardName)
     data->streamStatus = 1;
   }
 
-  struct rtp_payload *payload;
-  const void *p;
-  void *d;
   ssize_t readlen=0;
   size_t to_decode;
   size_t to_write;
-  void *buf, *decode_buf;
-  struct rtp_header *header;
 
   while(1)
   {
+    struct rtp_payload *payload;
+    const void *p;
+    void *d;
+    void *buf, *decode_buf;
+    struct rtp_header *header;
 
     timeout = poll(&pollin, 1, 500); //delay 1s to allow others to update our state
     if (timeout == 0)
@@ -347,6 +347,7 @@ void run_sink_A2DP(io_thread_tcb_s *data, audio *cardName)
     sent_frames = 0;
     sent = 0;
 
+
     do
     {
       sent_frames = snd_pcm_writei(data->pcm,
@@ -374,12 +375,12 @@ void run_sink_A2DP(io_thread_tcb_s *data, audio *cardName)
     }while (sent < (decode_bufsize - to_write) && timeout > 0 && data->command == IO_CMD_RUNNING);
 
     free(buf);
+    free(decode_buf);
   }
 
 cleanup:
   snd_pcm_drop(data->pcm);
   snd_pcm_close(data->pcm);
-  free(decode_buf);
 
   audioCards->sinks[data->cardNumberUsed].busy = 0;
 
