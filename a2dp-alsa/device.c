@@ -276,6 +276,7 @@ void run_sink_A2DP(io_thread_tcb_s *data, audio *cardName)
       goto cleanup;
     }
 
+    // for(;;) ??
     // prepare buffer
     bufsize = 2 * data->read_mtu;
     buf = malloc(bufsize);
@@ -392,16 +393,11 @@ cleanup:
 
 void run_source_A2DP(io_thread_tcb_s *data, audio *cardName)
 {
-  char *capture_device = "btheadset";
   //snd_pcm_t *data->pcm;
-  snd_pcm_uframes_t capture_psize;
-  unsigned int rate_HEADSET = 44100;
-  snd_pcm_hw_params_t *hw_params;
   void *bufHEADSET, *encode_buf_HEADSET;
   size_t bufsize_HEADSET, encode_bufsize_HEADSET;
   struct pollfd pollout = { data->fd, POLLOUT, 0 };
   int timeout_HEADSET;
-  int err;
 
   int r;
   int dir = 1;
@@ -577,7 +573,7 @@ void run_source_A2DP(io_thread_tcb_s *data, audio *cardName)
         sbc_get_codesize(&data->sbc); // ensure all of our source will fit in a single packet
     bufHEADSET = malloc (bufsize_HEADSET);
 
-    debug_print ("encode_buf %d buf %d", encode_bufsize_HEADSET, bufsize_HEADSET);
+    //debug_print ("encode_buf %d buf %d", encode_bufsize_HEADSET, bufsize_HEADSET);
 
     ssize_t readlen;
     int persize = bufsize_HEADSET;
@@ -593,7 +589,7 @@ void run_source_A2DP(io_thread_tcb_s *data, audio *cardName)
                                               snd_pcm_bytes_to_frames(data->pcm,persize - received));
       if(received_frames_HEADSET < 0)
       {
-        debug_print(">> NO AUDIO STREAM FROM PCM <<");
+        //debug_print(">> NO AUDIO STREAM FROM PCM <<");
         break;
       }
 
@@ -654,7 +650,7 @@ void run_source_A2DP(io_thread_tcb_s *data, audio *cardName)
     //debug_print ("nbytes: %zu\n", nbytes);
     if (!nbytes)
     {
-      debug_print ("nbytes: %zu\n", nbytes);
+      //debug_print ("nbytes: %zu\n", nbytes);
       break; // don't write if there is nothing to write
     }
 
