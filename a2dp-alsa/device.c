@@ -344,38 +344,36 @@ void run_sink_A2DP(io_thread_tcb_s *data, audio *cardName)
       to_write -= written;
     }
 
-    sent_frames = 0;
     sent = 0;
+//    do
+//    {
+//      sent_frames = snd_pcm_writei(data->pcm,
+//                                   (const uint8_t*) decode_buf + sent,
+//                                   snd_pcm_bytes_to_frames(data->pcm, decode_bufsize - to_write - sent));
+//      free(decode_buf);
+//      if(sent_frames < 0)
+//      {
+//        assert(sent_frames != -EAGAIN);
+//        if (sent_frames == -EPIPE)
+//          debug_print("%s: Buffer underrun! ", "snd_pcm_writei");
 
+//        if (sent_frames == -ESTRPIPE)
+//          debug_print("%s: System suspended! ", "snd_pcm_writei");
 
-    do
-    {
-      sent_frames = snd_pcm_writei(data->pcm,
-                                   (char *) decode_buf + sent,
-                                   snd_pcm_bytes_to_frames(data->pcm, decode_bufsize - to_write - sent));
-      if(sent_frames < 0)
-      {
-        assert(sent_frames != -EAGAIN);
-        if (sent_frames == -EPIPE)
-          debug_print("%s: Buffer underrun! ", "snd_pcm_writei");
+//        if (snd_pcm_recover(data->pcm, sent_frames, 1) < 0)
+//        {
+//          debug_print("%s: RECOVER !", "snd_pcm_writei");
+//          data->streamStatus = 2;
+//          data->command = IO_CMD_IDLE;
+//          goto cleanup;
+//        }
+//      }
+//      sent += snd_pcm_frames_to_bytes(data->pcm, sent_frames);
+//      //debug_print(">>> READ (%d) - WRITE (%d) - THREAD (%d)\n", readlen, (decode_bufsize - to_write), data->devId);
+//    }while (sent < (decode_bufsize - to_write) && timeout > 0 && data->command == IO_CMD_RUNNING);
 
-        if (sent_frames == -ESTRPIPE)
-          debug_print("%s: System suspended! ", "snd_pcm_writei");
-
-        if (snd_pcm_recover(data->pcm, sent_frames, 1) < 0)
-        {
-          debug_print("%s: RECOVER !", "snd_pcm_writei");
-          data->streamStatus = 2;
-          data->command = IO_CMD_IDLE;
-          goto cleanup;
-        }
-      }
-      sent += snd_pcm_frames_to_bytes(data->pcm, sent_frames);
-      //debug_print(">>> READ (%d) - WRITE (%d) - THREAD (%d)\n", readlen, (decode_bufsize - to_write), data->devId);
-    }while (sent < (decode_bufsize - to_write) && timeout > 0 && data->command == IO_CMD_RUNNING);
 
     free(buf);
-    free(decode_buf);
   }
 
 cleanup:
