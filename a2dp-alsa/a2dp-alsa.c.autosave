@@ -1140,7 +1140,7 @@ io_thread_tcb_s *create_io_thread()
     threadId++;
     p->devId = threadId;
     p->streamStatus = 0;
-    sbc_init (&p->sbc, 0);
+    sbc_init(&p->sbc, 0);
     debug_print ("\nThread ID : %d\n", threadId);
     pthread_create (&p->t_handle, NULL, io_thread_run, p);
     return p;

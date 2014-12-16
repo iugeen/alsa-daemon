@@ -278,14 +278,11 @@ void run_sink_A2DP(io_thread_tcb_s *data, audio *cardName)
 
     // for(;;) ??
     // prepare buffer
-    bufsize = 2 * data->read_mtu;
+    bufsize = 5 * data->read_mtu; // *2
     buf = malloc(bufsize);
 
     decode_bufsize = (bufsize / sbc_get_frame_length(&data->sbc) + 1 ) * sbc_get_codesize(&data->sbc);
     decode_buf = malloc (decode_bufsize);
-
-    header = buf;
-    payload = (struct rtp_payload*) ((uint8_t*) buf + sizeof(*header));
 
     if((readlen = read(data->fd, buf, bufsize)) < 0)
     {
@@ -314,43 +311,76 @@ void run_sink_A2DP(io_thread_tcb_s *data, audio *cardName)
       goto cleanup;
     }
 
+    header = buf;
+    payload = (struct rtp_payload*) ((uint8_t*) buf + sizeof(*header));
+
     p = buf + sizeof(*header) + sizeof(*payload);
     to_decode = readlen - sizeof(*header) - sizeof(*payload);
 
     d = decode_buf;
     to_write = decode_bufsize;
 
-    while (to_decode > 0)
-    {
-      decoded = sbc_decode(&data->sbc,
-                           p, to_decode,
-                           d, to_write,
-                           &written);
+    sent = 0;
 
+    int counter = 0;
+
+    while (to_decode > 0)  // to_decode > 0 &&
+    {
+        decoded = sbc_decode(&data->sbc,
+                             p, to_decode,
+                             d, to_write,
+                             &written);
       if (decoded <= 0)
       {
         debug_print("SBC decoding error %zd\n", decoded);
         goto cleanup;
       }
 
-      (size_t) decoded <= to_decode;
-      (size_t) decoded == sbc_get_frame_length(&data->sbc);
-
-      (size_t) written == sbc_get_codesize(&data->sbc);
+////      assert((size_t) decoded <= to_decode);
+////      assert((size_t) decoded == sbc_get_frame_length(&data->sbc));
+////      assert((size_t) written == sbc_get_codesize(&data->sbc));
 
       p = (uint8_t*) p + decoded;
       to_decode -= decoded;
       d = (uint8_t*) d + written;
       to_write -= written;
-    }
 
-    sent = 0;
+      sent_frames = snd_pcm_writei(data->pcm,
+                                   (const uint8_t*) decode_buf + sent,
+                                   snd_pcm_bytes_to_frames(data->pcm, decode_bufsize - to_write - sent));
+      if(sent_frames < 0)
+      {
+        assert(sent_frames != -EAGAIN);
+        if (sent_frames == -EPIPE)
+          debug_print("%s: Buffer underrun! ", "snd_pcm_writei");
+
+        if (sent_frames == -ESTRPIPE)
+          debug_print("%s: System suspended! ", "snd_pcm_writei");
+
+        if (snd_pcm_recover(data->pcm, sent_frames, 1) < 0)
+        {
+          debug_print("%s: RECOVER !", "snd_pcm_writei");
+          data->streamStatus = 2;
+          data->command = IO_CMD_IDLE;
+          goto cleanup;
+        }
+      }
+      sent += snd_pcm_frames_to_bytes(data->pcm, sent_frames);
+
+      counter++;
+    }
+    free(decode_buf);
+
+    debug_print(">> (%d)\n", counter);
+
+//    sent = 0;
 //    do
 //    {
 //      sent_frames = snd_pcm_writei(data->pcm,
 //                                   (const uint8_t*) decode_buf + sent,
 //                                   snd_pcm_bytes_to_frames(data->pcm, decode_bufsize - to_write - sent));
 //      free(decode_buf);
+
 //      if(sent_frames < 0)
 //      {
 //        assert(sent_frames != -EAGAIN);
@@ -369,9 +399,8 @@ void run_sink_A2DP(io_thread_tcb_s *data, audio *cardName)
 //        }
 //      }
 //      sent += snd_pcm_frames_to_bytes(data->pcm, sent_frames);
-//      //debug_print(">>> READ (%d) - WRITE (%d) - THREAD (%d)\n", readlen, (decode_bufsize - to_write), data->devId);
-//    }while (sent < (decode_bufsize - to_write) && timeout > 0 && data->command == IO_CMD_RUNNING);
-
+//      debug_print(">>> READ (%d) - WRITE (%d) - THREAD (%d)\n", readlen, (decode_bufsize - to_write), data->devId);
+//    }while (sent < (decode_bufsize - to_write));
 
     free(buf);
   }
@@ -379,9 +408,7 @@ void run_sink_A2DP(io_thread_tcb_s *data, audio *cardName)
 cleanup:
   snd_pcm_drop(data->pcm);
   snd_pcm_close(data->pcm);
-
   audioCards->sinks[data->cardNumberUsed].busy = 0;
-
   debug_print("FINISH audio stream ...\n");
 }
 
