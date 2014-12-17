@@ -86,7 +86,6 @@ void run_sink_A2DP(io_thread_tcb_s *data, audio *cardName)
   snd_pcm_sframes_t sent_frames = 0;
   int sent = 0;
   struct pollfd pollin = { data->fd, POLLIN, 0 };
-  char *cardname; // = malloc(sizeof(char));
   int i = 0;
 
   if(data->streamStatus == 0 || data->streamStatus == 2)
@@ -182,7 +181,6 @@ void run_sink_A2DP(io_thread_tcb_s *data, audio *cardName)
         if(audioCards->sinks[i].busy == 0)
         {
           audioCards->sinks[i].busy = 1;
-          cardname = cardName->sinks[i].name;
           data->cardNumberUsed = i;
           break;
         }
@@ -278,7 +276,7 @@ void run_sink_A2DP(io_thread_tcb_s *data, audio *cardName)
 
     // for(;;) ??
     // prepare buffer
-    bufsize = 5 * data->read_mtu; // *2
+    bufsize = 2 * data->read_mtu; // *2
     buf = malloc(bufsize);
 
     decode_bufsize = (bufsize / sbc_get_frame_length(&data->sbc) + 1 ) * sbc_get_codesize(&data->sbc);
@@ -322,8 +320,6 @@ void run_sink_A2DP(io_thread_tcb_s *data, audio *cardName)
 
     sent = 0;
 
-    int counter = 0;
-
     while (to_decode > 0)  // to_decode > 0 &&
     {
         decoded = sbc_decode(&data->sbc,
@@ -344,10 +340,15 @@ void run_sink_A2DP(io_thread_tcb_s *data, audio *cardName)
       to_decode -= decoded;
       d = (uint8_t*) d + written;
       to_write -= written;
+    }
 
+    sent = 0;
+    do
+    {
       sent_frames = snd_pcm_writei(data->pcm,
                                    (const uint8_t*) decode_buf + sent,
                                    snd_pcm_bytes_to_frames(data->pcm, decode_bufsize - to_write - sent));
+
       if(sent_frames < 0)
       {
         assert(sent_frames != -EAGAIN);
@@ -366,42 +367,9 @@ void run_sink_A2DP(io_thread_tcb_s *data, audio *cardName)
         }
       }
       sent += snd_pcm_frames_to_bytes(data->pcm, sent_frames);
-
-      counter++;
-    }
+      //debug_print(">>> READ (%d) - WRITE (%d) - THREAD (%d)\n", readlen, (decode_bufsize - to_write), data->devId);
+    }while (sent < (decode_bufsize - to_write));
     free(decode_buf);
-
-    debug_print(">> (%d)\n", counter);
-
-//    sent = 0;
-//    do
-//    {
-//      sent_frames = snd_pcm_writei(data->pcm,
-//                                   (const uint8_t*) decode_buf + sent,
-//                                   snd_pcm_bytes_to_frames(data->pcm, decode_bufsize - to_write - sent));
-//      free(decode_buf);
-
-//      if(sent_frames < 0)
-//      {
-//        assert(sent_frames != -EAGAIN);
-//        if (sent_frames == -EPIPE)
-//          debug_print("%s: Buffer underrun! ", "snd_pcm_writei");
-
-//        if (sent_frames == -ESTRPIPE)
-//          debug_print("%s: System suspended! ", "snd_pcm_writei");
-
-//        if (snd_pcm_recover(data->pcm, sent_frames, 1) < 0)
-//        {
-//          debug_print("%s: RECOVER !", "snd_pcm_writei");
-//          data->streamStatus = 2;
-//          data->command = IO_CMD_IDLE;
-//          goto cleanup;
-//        }
-//      }
-//      sent += snd_pcm_frames_to_bytes(data->pcm, sent_frames);
-//      debug_print(">>> READ (%d) - WRITE (%d) - THREAD (%d)\n", readlen, (decode_bufsize - to_write), data->devId);
-//    }while (sent < (decode_bufsize - to_write));
-
     free(buf);
   }
 
@@ -588,11 +556,21 @@ void run_source_A2DP(io_thread_tcb_s *data, audio *cardName)
     assert(r == 0);
   }
 
+  ssize_t readlen;
+  int persize = bufsize_HEADSET;
+  snd_pcm_sframes_t received_frames_HEADSET = 0;
+  int received = 0;
+  struct rtp_header *header;
+  struct rtp_payload *payload;
+  size_t nbytes;
+  ssize_t written;
+  ssize_t encoded;
+
   // stream
   while (1)
   {
     // get buffers
-    encode_bufsize_HEADSET = data->write_mtu;
+    encode_bufsize_HEADSET = 2 * data->write_mtu;
     encode_buf_HEADSET = malloc (encode_bufsize_HEADSET);
 
     bufsize_HEADSET = (encode_bufsize_HEADSET / sbc_get_frame_length(&data->sbc)) * // max frames allowed in a packet
@@ -600,14 +578,6 @@ void run_source_A2DP(io_thread_tcb_s *data, audio *cardName)
     bufHEADSET = malloc (bufsize_HEADSET);
 
     //debug_print ("encode_buf %d buf %d", encode_bufsize_HEADSET, bufsize_HEADSET);
-
-    ssize_t readlen;
-    int persize = bufsize_HEADSET;
-    snd_pcm_sframes_t received_frames_HEADSET = 0;
-    int received = 0;
-    struct rtp_header *header;
-    struct rtp_payload *payload;
-    size_t nbytes;
 
     do{
       received_frames_HEADSET = snd_pcm_readi(data->pcm,
@@ -633,10 +603,6 @@ void run_source_A2DP(io_thread_tcb_s *data, audio *cardName)
 
     while (to_encode >= sbc_get_codesize(&data->sbc))
     {
-      //debug_print ("%zu ", to_encode);
-      ssize_t written;
-      ssize_t encoded;
-
       //debug_print ("%p %d %d\n", d, to_write, sbc_get_frame_length (&data->sbc));
       encoded = sbc_encode(&data->sbc,
                            p, to_encode,
@@ -657,6 +623,7 @@ void run_source_A2DP(io_thread_tcb_s *data, audio *cardName)
       frame_count++;
     }
 
+    free(bufHEADSET);
     // encapsulate it in a2dp RTP packets
     /* write it to the fifo */
     memset(encode_buf_HEADSET, 0, sizeof(*header) + sizeof(*payload));
@@ -676,7 +643,7 @@ void run_source_A2DP(io_thread_tcb_s *data, audio *cardName)
     //debug_print ("nbytes: %zu\n", nbytes);
     if (!nbytes)
     {
-      //debug_print ("nbytes: %zu\n", nbytes);
+      debug_print ("nbytes: %zu\n", nbytes);
       break; // don't write if there is nothing to write
     }
 
@@ -700,14 +667,13 @@ void run_source_A2DP(io_thread_tcb_s *data, audio *cardName)
     if (timeout_HEADSET > 0)
     {
       //debug_print ("flush bluetooth\n");
-      write (data->fd, encode_buf_HEADSET, nbytes);
+      write(data->fd, encode_buf_HEADSET, nbytes);
     }
+    free(encode_buf_HEADSET);
   }
 
   // cleanup
   debug_print ("=FINISH=\n");
   snd_pcm_close(data->pcm);
-  free(bufHEADSET);
-  free(encode_buf_HEADSET);
   audioCards->sources[data->cardNumberUsed].busy = 0;
 }

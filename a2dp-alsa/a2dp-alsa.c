@@ -665,6 +665,8 @@ DBusMessage* endpoint_set_configuration (DBusMessage *msg, io_thread_tcb_s **io_
             }
         }
 
+        free(newEndpoint);
+
         HASH_ADD_KEYPTR (hh, head, io_data->transport_path, strlen(io_data->transport_path), io_data);
         *io_threads_table = head;
     }
@@ -709,14 +711,12 @@ DBusMessage* endpoint_clear_configuration (DBusMessage *msg, io_thread_tcb_s **i
     if (io_data)
     {
         threadId--;
+        audioCards->sources[io_data->cardNumberUsed].busy = 0;
         debug_print ("stopping thread %p\n",io_data);
         HASH_DEL (head, io_data);
         *io_threads_table = head;
         destroy_io_thread (io_data);
     }
-
-    //transport_release(conn, io_data->transport_path, io_data);
-
     reply = dbus_message_new_method_return(msg);
     return reply;
 }
@@ -1140,7 +1140,7 @@ io_thread_tcb_s *create_io_thread()
     threadId++;
     p->devId = threadId;
     p->streamStatus = 0;
-    sbc_init (&p->sbc, 0);
+    sbc_init(&p->sbc, 0);
     debug_print ("\nThread ID : %d\n", threadId);
     pthread_create (&p->t_handle, NULL, io_thread_run, p);
     return p;
@@ -1868,7 +1868,7 @@ int main(int argc, char** argv)
     char *bt_object;	// bluetooth device objectpath
     io_thread_tcb_s *io_threads_table = NULL; // hashtable of io_threads
     int msg_waiting_time = -1; //default is wait forever
-    audioCards = malloc(10*sizeof(audio));
+    audioCards = malloc(sizeof(audio));
     char *newEndpoint = malloc(50);
     int i = 0;
 
@@ -1901,6 +1901,8 @@ int main(int argc, char** argv)
         }
 
     } else return 1;
+
+    free(newEndpoint);
 
     dbus_bus_add_match (system_bus, "type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'", &err);
     handle_dbus_error (&err, __FUNCTION__, __LINE__);
