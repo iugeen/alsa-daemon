@@ -349,6 +349,7 @@ void run_sink_A2DP(io_thread_tcb_s *data, audio *cardName)
                                    (const uint8_t*) decode_buf + sent,
                                    snd_pcm_bytes_to_frames(data->pcm, decode_bufsize - to_write - sent));
 
+      free(decode_buf);
       if(sent_frames < 0)
       {
         assert(sent_frames != -EAGAIN);
@@ -369,7 +370,6 @@ void run_sink_A2DP(io_thread_tcb_s *data, audio *cardName)
       sent += snd_pcm_frames_to_bytes(data->pcm, sent_frames);
       //debug_print(">>> READ (%d) - WRITE (%d) - THREAD (%d)\n", readlen, (decode_bufsize - to_write), data->devId);
     }while (sent < (decode_bufsize - to_write));
-    free(decode_buf);
     free(buf);
   }
 
