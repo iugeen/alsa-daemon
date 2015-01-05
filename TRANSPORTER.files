@@ -27,3 +27,4 @@ a2dp-alsa/Makefile
 a2dp-alsa/device.h
 a2dp-alsa/device.c
 a2dp-alsa/util.h
+a2dp-alsa/atomic.h
