@@ -15,9 +15,11 @@
 #include "uthash.h"
 #include "device.h"
 
+#include "memchunk.h"
+
 #define pa_streq(a,b) (!strcmp((a),(b)))
 #define PCM_DEVICE        "plughw:1,0"
-#define PCM_DEVICE_SECOND "A2DP_playback_1"
+#define PCM_DEVICE_SECOND "A2DP_playback_0"
 #define true 1
 #define false 0
 #define debug_print(...) (fprintf (stderr, __VA_ARGS__))
@@ -67,6 +69,7 @@ void parseConfigFile(audio *audioCards)
     }
 }
 
+
 void run_sink_A2DP(io_thread_tcb_s *data, audio *cardName)
 {
   int r;
@@ -81,8 +84,6 @@ void run_sink_A2DP(io_thread_tcb_s *data, audio *cardName)
 //  int n_pollfd;
   int timeout;
   size_t bufsize, decode_bufsize;
-  size_t written;
-  size_t decoded;
   snd_pcm_sframes_t sent_frames = 0;
   int sent = 0;
   struct pollfd pollin = { data->fd, POLLIN, 0 };
@@ -187,32 +188,39 @@ void run_sink_A2DP(io_thread_tcb_s *data, audio *cardName)
     }
 
     debug_print ("\n INIT PCM : (%s)!!!\n", cardName->sinks[i].name);
+    snd_pcm_t *handle;
 
-    r = snd_pcm_open(&data->pcm, cardName->sinks[data->cardNumberUsed].name, SND_PCM_STREAM_PLAYBACK, 0);
+    r = snd_pcm_open(&handle, "A2DP_playback_0", SND_PCM_STREAM_PLAYBACK, SND_PCM_NO_AUTO_FORMAT);
     assert(r == 0);
 
-    r = snd_pcm_hw_params_any(data->pcm, hwparams);
-    assert(r == 0);
-    r = snd_pcm_hw_params_set_rate_resample(data->pcm, hwparams, 1);
-    assert(r == 0);
-    r = snd_pcm_hw_params_set_access(data->pcm, hwparams, SND_PCM_ACCESS_RW_INTERLEAVED);
-    assert(r == 0);
-    r = snd_pcm_hw_params_set_format(data->pcm, hwparams, SND_PCM_FORMAT_S16_LE);
-    assert(r == 0);
-    r = snd_pcm_hw_params_set_rate_near(data->pcm, hwparams, &rate, NULL);
-    assert(r == 0);
-    r = snd_pcm_hw_params_set_channels(data->pcm, hwparams, 2);
-    assert(r == 0);
-    r = snd_pcm_hw_params_set_periods_integer(data->pcm, hwparams);
-    assert(r == 0);
-    r = snd_pcm_hw_params_set_periods_near(data->pcm, hwparams, &periods, &dir);
-    assert(r == 0);
-    r = snd_pcm_hw_params_set_buffer_size_near(data->pcm, hwparams, &buffer_size);
-    assert(r == 0);
-    r = snd_pcm_hw_params(data->pcm, hwparams);
-    assert(r == 0);
-    r = snd_pcm_hw_params_current(data->pcm, hwparams);
-    assert(r == 0);
+//    r = snd_pcm_hw_params_any(data->pcm, hwparams);
+//    assert(r == 0);
+//    r = snd_pcm_hw_params_set_rate_resample(data->pcm, hwparams, 1);
+//    assert(r == 0);
+//    r = snd_pcm_hw_params_set_access(data->pcm, hwparams, SND_PCM_ACCESS_RW_INTERLEAVED);
+//    assert(r == 0);
+//    r = snd_pcm_hw_params_set_format(data->pcm, hwparams, SND_PCM_FORMAT_S16_LE);
+//    assert(r == 0);
+//    r = snd_pcm_hw_params_set_rate_near(data->pcm, hwparams, &rate, NULL);
+//    assert(r == 0);
+//    r = snd_pcm_hw_params_set_channels(data->pcm, hwparams, 2);
+//    assert(r == 0);
+//    r = snd_pcm_hw_params_set_periods_integer(data->pcm, hwparams);
+//    assert(r == 0);
+//    r = snd_pcm_hw_params_set_periods_near(data->pcm, hwparams, &periods, &dir);
+//    assert(r == 0);
+//    r = snd_pcm_hw_params_set_buffer_size_near(data->pcm, hwparams, &buffer_size);
+//    assert(r == 0);
+//    r = snd_pcm_hw_params(data->pcm, hwparams);
+//    assert(r == 0);
+//    r = snd_pcm_hw_params_current(data->pcm, hwparams);
+//    assert(r == 0);
+
+    while(1)
+    {
+
+    }
+
     r = snd_pcm_sw_params_current(data->pcm, swparams);
     assert(r == 0);
     r = snd_pcm_sw_params_set_avail_min(data->pcm, swparams, 1);
@@ -235,12 +243,6 @@ void run_sink_A2DP(io_thread_tcb_s *data, audio *cardName)
     assert(r == 0);
     r = snd_pcm_sw_params_current(data->pcm, swparams);
     assert(r == 0);
-//    n_pollfd = snd_pcm_poll_descriptors_count(data->pcm);
-//    assert(n_pollfd > 0);
-//    pollfds = malloc(sizeof(struct pollfd) * n_pollfd);
-//    assert(pollfds);
-//    r = snd_pcm_poll_descriptors(data->pcm, pollfds, n_pollfd);
-//    assert(r == n_pollfd);
 
     printf("Starting. Buffer size is %u frames\n", (unsigned int) buffer_size);
     data->command = IO_CMD_RUNNING;
@@ -251,15 +253,21 @@ void run_sink_A2DP(io_thread_tcb_s *data, audio *cardName)
   size_t to_decode;
   size_t to_write;
 
+  pa_memchunk memchunk;
+  //pa_mempool *pool_a = pa_mempool_new(false, 0);
+
+  //memchunk.memblock = pa_memblock_new(pa_mempool_new(false, 1024*1024*1024), data->read_mtu);
+  //memchunk.index = memchunk.length = 0;
+
+  struct rtp_payload *payload;
+  const void *p;
+  void *d;
+  void *buf, *decode_buf;
+  struct rtp_header *header;
+
   while(1)
   {
-    struct rtp_payload *payload;
-    const void *p;
-    void *d;
-    void *buf, *decode_buf;
-    struct rtp_header *header;
-
-    timeout = poll(&pollin, 1, 500); //delay 1s to allow others to update our state
+    timeout = poll(&pollin, 1, 500);
     if (timeout == 0)
     {
       debug_print("..continue.(%d)\n",timeout);
@@ -274,13 +282,13 @@ void run_sink_A2DP(io_thread_tcb_s *data, audio *cardName)
       goto cleanup;
     }
 
-    // for(;;) ??
+
     // prepare buffer
-    bufsize = 2 * data->read_mtu; // *2
+    bufsize = data->read_mtu; // *2
     buf = malloc(bufsize);
 
-    decode_bufsize = (bufsize / sbc_get_frame_length(&data->sbc) + 1 ) * sbc_get_codesize(&data->sbc);
-    decode_buf = malloc (decode_bufsize);
+    header = buf;
+    payload = (struct rtp_payload*) ((uint8_t*) buf + sizeof(*header));
 
     if((readlen = read(data->fd, buf, bufsize)) < 0)
     {
@@ -309,68 +317,86 @@ void run_sink_A2DP(io_thread_tcb_s *data, audio *cardName)
       goto cleanup;
     }
 
-    header = buf;
-    payload = (struct rtp_payload*) ((uint8_t*) buf + sizeof(*header));
-
     p = buf + sizeof(*header) + sizeof(*payload);
     to_decode = readlen - sizeof(*header) - sizeof(*payload);
 
-    d = decode_buf;
-    to_write = decode_bufsize;
+//    decode_bufsize = (bufsize / sbc_get_frame_length(&data->sbc) + 1 ) * sbc_get_codesize(&data->sbc);
+//    decode_buf = malloc(decode_bufsize);
 
-    sent = 0;
+////    d = pa_memblock_acquire(memchunk.memblock);
+////    to_write = memchunk.length = pa_memblock_get_length(memchunk.memblock);
+///
+ while(1)
+ {
+   decode_bufsize = (bufsize / sbc_get_frame_length(&data->sbc) + 1 ) * sbc_get_codesize(&data->sbc);
+ }
 
-    while (to_decode > 0)  // to_decode > 0 &&
-    {
-        decoded = sbc_decode(&data->sbc,
-                             p, to_decode,
-                             d, to_write,
-                             &written);
-      if (decoded <= 0)
-      {
-        debug_print("SBC decoding error %zd\n", decoded);
-        goto cleanup;
-      }
+//    decode_bufsize = (bufsize / sbc_get_frame_length(&data->sbc) + 1 ) * sbc_get_codesize(&data->sbc);
+//    decode_buf = malloc(decode_bufsize);
+//    memset(decode_buf, 0, decode_bufsize);
 
-////      assert((size_t) decoded <= to_decode);
-////      assert((size_t) decoded == sbc_get_frame_length(&data->sbc));
-////      assert((size_t) written == sbc_get_codesize(&data->sbc));
+//    d = decode_buf;
+//    to_write = decode_bufsize;
 
-      p = (uint8_t*) p + decoded;
-      to_decode -= decoded;
-      d = (uint8_t*) d + written;
-      to_write -= written;
-    }
+//    sent = 0;
+//    while (to_decode > 0)  // to_decode > 0 &&
+//    {
+//      size_t written;
+//      size_t decoded;
 
-    sent = 0;
-    do
-    {
-      sent_frames = snd_pcm_writei(data->pcm,
-                                   (const uint8_t*) decode_buf + sent,
-                                   snd_pcm_bytes_to_frames(data->pcm, decode_bufsize - to_write - sent));
+//      decoded = sbc_decode(&data->sbc,
+//                           p, to_decode,
+//                           d, to_write,
+//                           &written);
+//      if (decoded <= 0)
+//      {
+//        debug_print("SBC decoding error %zd\n", decoded);
+//        goto cleanup;
+//      }
 
-      free(decode_buf);
-      if(sent_frames < 0)
-      {
-        assert(sent_frames != -EAGAIN);
-        if (sent_frames == -EPIPE)
-          debug_print("%s: Buffer underrun! ", "snd_pcm_writei");
+//      p = (uint8_t*) p + decoded;
+//      to_decode -= decoded;
+//      d = (uint8_t*) d + written;
+//      to_write -= written;
 
-        if (sent_frames == -ESTRPIPE)
-          debug_print("%s: System suspended! ", "snd_pcm_writei");
+//   }
 
-        if (snd_pcm_recover(data->pcm, sent_frames, 1) < 0)
-        {
-          debug_print("%s: RECOVER !", "snd_pcm_writei");
-          data->streamStatus = 2;
-          data->command = IO_CMD_IDLE;
-          goto cleanup;
-        }
-      }
-      sent += snd_pcm_frames_to_bytes(data->pcm, sent_frames);
-      //debug_print(">>> READ (%d) - WRITE (%d) - THREAD (%d)\n", readlen, (decode_bufsize - to_write), data->devId);
-    }while (sent < (decode_bufsize - to_write));
-    free(buf);
+//    free(decode_buf);
+//    free(buf);
+
+////    memchunk.length -= to_write;
+////    pa_memblock_release(memchunk.memblock);
+//    //pa_source_post(u->source, &memchunk);
+
+//    sent = 0;
+//    do
+//    {
+//      sent_frames = snd_pcm_writei(data->pcm,
+//                                   (const uint8_t*) decode_buf + sent,
+//                                   snd_pcm_bytes_to_frames(data->pcm, decode_bufsize - to_write - sent));
+
+//      free(decode_buf);
+//      free(buf);
+//      if(sent_frames < 0)
+//      {
+//        assert(sent_frames != -EAGAIN);
+//        if (sent_frames == -EPIPE)
+//          debug_print("%s: Buffer underrun! ", "snd_pcm_writei");
+
+//        if (sent_frames == -ESTRPIPE)
+//          debug_print("%s: System suspended! ", "snd_pcm_writei");
+
+//        if (snd_pcm_recover(data->pcm, sent_frames, 1) < 0)
+//        {
+//          debug_print("%s: RECOVER !", "snd_pcm_writei");
+//          data->streamStatus = 2;
+//          data->command = IO_CMD_IDLE;
+//          goto cleanup;
+//        }
+//      }
+//      sent += snd_pcm_frames_to_bytes(data->pcm, sent_frames);
+//      //debug_print(">>> READ (%d) - WRITE (%d) - THREAD (%d)\n", readlen, (decode_bufsize - to_write), data->devId);
+//    }while (sent < (decode_bufsize - to_write));
   }
 
 cleanup:

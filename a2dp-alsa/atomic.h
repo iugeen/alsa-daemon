@@ -1,6 +1,9 @@
 #ifndef ATOMIC_H
 #define ATOMIC_H
 
+#define true 1
+#define false 0
+
 #include <atomic_ops.h>
 
 typedef struct pa_atomic {
@@ -33,9 +36,9 @@ static inline int pa_atomic_dec(pa_atomic_t *a) {
     return (int) AO_fetch_and_sub1_full(&a->value);
 }
 
-static inline bool pa_atomic_cmpxchg(pa_atomic_t *a, int old_i, int new_i) {
-    return AO_compare_and_swap_full(&a->value, (unsigned long) old_i, (unsigned long) new_i);
-}
+//static inline bool pa_atomic_cmpxchg(pa_atomic_t *a, int old_i, int new_i) {
+//    return AO_compare_and_swap_full(&a->value, (unsigned long) old_i, (unsigned long) new_i);
+//}
 
 typedef struct pa_atomic_ptr {
     volatile AO_t value;
@@ -51,8 +54,8 @@ static inline void pa_atomic_ptr_store(pa_atomic_ptr_t *a, void *p) {
     AO_store_full(&a->value, (AO_t) p);
 }
 
-static inline bool pa_atomic_ptr_cmpxchg(pa_atomic_ptr_t *a, void *old_p, void* new_p) {
-    return AO_compare_and_swap_full(&a->value, (AO_t) old_p, (AO_t) new_p);
-}
+//static inline bool pa_atomic_ptr_cmpxchg(pa_atomic_ptr_t *a, void *old_p, void* new_p) {
+//    return AO_compare_and_swap_full(&a->value, (AO_t) old_p, (AO_t) new_p);
+//}
 
 #endif // ATOMIC_H

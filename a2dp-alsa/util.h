@@ -7,7 +7,7 @@
 
 typedef struct cards
 {
-    char name[200]; // 20 character array
+    char name[20]; // 20 character array
     int  busy;
 }cards;
 

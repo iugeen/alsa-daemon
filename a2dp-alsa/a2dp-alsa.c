@@ -52,7 +52,7 @@
 #define A2DP_SOURCE_UUID	   "0000110a-0000-1000-8000-00805f9b34fb"
 
 #define pa_streq(a,b) (!strcmp((a),(b)))
-#define PCM_DEVICE        "A2DP_playback_0"
+#define PCM_DEVICE        "plughw:1,0"
 #define PCM_DEVICE_SECOND "A2DP_playback_1"
 
 void *io_thread_run(void *ptr);
@@ -1230,6 +1230,67 @@ end:
 }
 
 
+static void getALSADevices(int *count, char **devices)
+{
+  void **hints;
+  const char *ifaces[] = {"card", "pcm", "rawmidi", "timer", "seq", "hwdep", 0};
+  int index = 0;
+  void **str;
+  char *name;
+  char *desc;
+  char *io;
+  char *name_tmp;
+  char *desc_tmp;
+  int devIdx = 0;
+  int len;
+
+  snd_config_update();
+
+  while (ifaces[index]) {
+
+    printf(" --- Trying interface %s ---\n", ifaces[index]);
+    if (snd_device_name_hint(-1, ifaces[index], &hints) < 0) {
+      printf("Querying devices failed for %s.\n", ifaces[index]);
+      index++;
+      continue;
+    }
+
+    str = hints;
+
+    while (*str) {
+      name = snd_device_name_get_hint(*str, "NAME");
+      desc = snd_device_name_get_hint(*str, "DESC");
+      io = snd_device_name_get_hint(*str, "IOID");
+
+      len = strlen(name)+1;
+      name_tmp = (char*)malloc(len);
+      devices[devIdx] = name_tmp;
+      strcpy(name_tmp, name);
+      devices[devIdx][len-1] = '\0';
+
+      printf("\n-- %s --\n", name);
+      printf("IO: %s\n", io);
+
+      desc_tmp = strtok(desc, "\n");
+
+      while (desc_tmp != NULL) {
+          printf("%s\n", desc_tmp);
+          desc_tmp = strtok(NULL, "\n");
+      }
+
+      free(name);
+      free(desc);
+      devIdx++;
+      str++;
+    }
+    index++;
+    snd_device_name_free_hint(hints);
+  }
+  *count = devIdx;
+  return;
+}
+
+
 //////////////////////////////// MAIN ////////////////////////////////
 
 int main(int argc, char** argv)
@@ -1241,9 +1302,30 @@ int main(int argc, char** argv)
     char *bt_object;	// bluetooth device objectpath
     io_thread_tcb_s *io_threads_table = NULL; // hashtable of io_threads
     int msg_waiting_time = -1; //default is wait forever
+    int i = 0;
+
+    int deviceType = 0;
+        snd_pcm_t *handle;
+        int rc;
+
+  /* Open PCM device for playback. */
+    rc = snd_pcm_open(&handle, "A2DP_playback_0",  // "A2DP_playback_0"
+                      SND_PCM_STREAM_PLAYBACK, SND_PCM_NO_AUTO_FORMAT);
+    if (rc < 0)
+    {
+      fprintf(stderr,
+              "unable to open pcm device: %s\n",
+              snd_strerror(rc));
+      exit(1);
+    }
+
+    while(1)
+    {
+
+    }
+
     audioCards = malloc(sizeof(audio));
     char *newEndpoint = malloc(50);
-    int i = 0;
 
     // 1. init - get bus and adapter
     debug_print ("daemon started\n");
@@ -1280,7 +1362,96 @@ int main(int argc, char** argv)
     dbus_bus_add_match (system_bus, "type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'", &err);
     handle_dbus_error (&err, __FUNCTION__, __LINE__);
 
-    int deviceType = 0;
+    int icount = -1;
+    while(!snd_card_next(&icount)&&icount!=-1)
+    {
+        char *name = NULL;
+        char *longname = NULL;
+        snd_card_get_name(icount,&name);
+        snd_card_get_longname(icount,&longname);
+        printf("hw:%d : %s, %s\n",icount,name,longname);
+
+        snd_ctl_t *c = NULL;
+        char devname[10];
+        sprintf(devname,"hw:%d",icount);
+        snd_ctl_open(&c,devname,0);
+        snd_ctl_card_info_t *info = NULL;
+        snd_ctl_card_info_alloca(&info);
+        snd_ctl_card_info(c,info);
+        printf(" %s (%s)\n",
+                   snd_ctl_card_info_get_id(info),
+                   snd_ctl_card_info_get_name(info));
+        snd_pcm_info_t *pcminfo = NULL;
+        snd_pcm_info_alloca(&pcminfo);
+        int j = -1;
+        while(!snd_ctl_pcm_next_device(c,&j)&&j>=0)
+        {
+            snd_pcm_info_set_device(pcminfo,j);
+            const snd_pcm_stream_t streams[] = { SND_PCM_STREAM_PLAYBACK,
+                                          SND_PCM_STREAM_CAPTURE };
+            int k;
+            for( k = 0; k < sizeof(streams)/sizeof(*streams); k++ )
+            {
+                snd_pcm_stream_t stream = streams[k];
+                snd_pcm_info_set_stream(pcminfo,stream);
+                if(snd_ctl_pcm_info(c,pcminfo)<0) continue;
+                printf("   hw:%d,%d : %s (%s) %s\n", icount, j,
+                       snd_pcm_info_get_id(pcminfo),
+                       snd_pcm_info_get_name(pcminfo),
+                       snd_pcm_stream_name(stream));
+                int sub;
+
+                int subcount = snd_pcm_info_get_subdevices_count(pcminfo);
+                for( sub = 0; sub < subcount; sub++ )
+                {
+                    snd_pcm_info_set_subdevice(pcminfo,sub);
+                    printf("    %d: %s\n", sub, snd_pcm_info_get_subdevice_name(pcminfo));
+                }
+            }
+        }
+
+        snd_ctl_close(c);
+        free(name);
+        free(longname);
+    }
+
+    printf("\nhints:\n");
+    void **hint = NULL;
+    int ret = snd_device_name_hint(-1,"pcm",&hint);
+    if(!ret)
+    {
+        void **h = hint;
+        for( ; *h; h++ )
+        {
+            char *NAME = snd_device_name_get_hint(*h,"NAME");
+            char *DESC = snd_device_name_get_hint(*h,"DESC");
+            char *IOID = snd_device_name_get_hint(*h,"IOID");
+            printf("  NAME: %s\n",NAME);
+            char *a = strchr(DESC,'\n');
+            if(a) *a = 0;
+            printf("  DESC: %s\n",DESC);
+            while(a)
+            {
+                char *b = a+1;
+                a = strchr(b,'\n');
+                if(a) *a = 0;
+                printf("        %s\n",b);
+            }
+            printf("  IOID: %s\n",IOID);
+            printf("\n");
+            free(NAME);
+            free(DESC);
+            free(IOID);
+        }
+    }
+    snd_device_name_free_hint(hint);
+
+
+    while(1)
+    {
+
+    }
+
 
     // 4. main-loop
     while (!quit && dbus_connection_read_write (system_bus, msg_waiting_time))
